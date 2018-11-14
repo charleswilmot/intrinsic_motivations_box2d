@@ -54,11 +54,12 @@ class Window:
         if self._axes_initialized:
             self.ax_joints.set_ylim(*lim)
 
-    def __initaxes__(self, vision, proprioception, tactile_map):
+    def __initaxes__(self, vision, positions, speeds, tactile_map):
         tactile_map[0] = 1
         self.ax_tactile_line, = self.ax_tactile.plot(tactile_map)
         self.ax_vision_image = self.ax_vision.imshow(vision)
-        self.ax_joints_speed, self.ax_joints_angle = self.ax_joints.plot(proprioception, "o")
+        self.ax_joints_speed, = self.ax_joints.plot(speeds, "o")
+        self.ax_joints_angle, = self.ax_joints.plot(positions, "o")
         self.ax_vision_image.set_clim(*self._vision_lim)
         self.ax_vision_image.axes.get_xaxis().set_visible(False)
         self.ax_vision_image.axes.get_yaxis().set_visible(False)
@@ -66,21 +67,21 @@ class Window:
         self.ax_tactile.axes.get_yaxis().set_ticks([0, 1])
         self.ax_tactile.set_title("Skin sensor")
         self.ax_joints.set_ylim(*self._proprioception_lim)
-        self.ax_joints.axes.get_xaxis().set_ticks(range(proprioception.shape[0]))
+        self.ax_joints.axes.get_xaxis().set_ticks(range(speeds.shape[0]))
         self.ax_joints.set_title("Joints speed/position")
         self.fig.show()
         self._axes_initialized = True
 
-    def update(self, vision, proprioception, tactile_map):
+    def update(self, vision, positions, speeds, tactile_map):
         if self._axes_initialized:
             self.ax_vision_image.set_data(vision)
             self.ax_tactile_line.set_ydata(tactile_map)
-            self.ax_joints_speed.set_ydata(proprioception[:, 0])
-            self.ax_joints_angle.set_ydata(proprioception[:, 1])
+            self.ax_joints_speed.set_ydata(positions)
+            self.ax_joints_angle.set_ydata(speeds)
             self.fig.canvas.draw()
             self.fig.canvas.flush_events()
         else:
-            self.__initaxes__(vision, proprioception, tactile_map)
+            self.__initaxes__(vision, positions, speeds, tactile_map)
 
 
 if __name__ == "__main__":

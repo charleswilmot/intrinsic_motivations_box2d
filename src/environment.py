@@ -36,7 +36,9 @@ class Environment(object):
         self.joint_pids = {key: pid.PID(dt=self.dt)
                            for key in self.joints}
         self._joint_keys = [key for key in self.joints]
-        self._proprio_buf = np.zeros((len(self.joints), 2))
+        self._joint_keys.sort()
+        self._positions_buf = np.zeros(len(self.joints))
+        self._speeds_buf = np.zeros(len(self.joints))
         self.skin = tm.Skin(self.bodies, skin_order, skin_resolution)
         self._joints_in_position_mode = set()
         tactile_bodies_names = set([body_name for body_name, edge in skin_order])
@@ -85,23 +87,28 @@ class Environment(object):
     def _get_state_tactile(self):
         return self.skin.compute_map()
 
-    def _get_state_proprio(self):
+    def _get_state_positions(self):
         for i, key in enumerate(self._joint_keys):
-            self._proprio_buf[i] = \
-                self.joints[key].motorSpeed,\
-                self.joints[key].angle
-        self._proprio_buf[:, 1] %= 2 * np.pi
-        self._proprio_buf[:, 1] -= np.pi
-        return self._proprio_buf
+            self._positions_buf[i] = self.joints[key].angle
+        self._positions_buf %= 2 * np.pi
+        self._positions_buf -= np.pi
+        return self._positions_buf
+
+    def _get_state_speeds(self):
+        for i, key in enumerate(self._joint_keys):
+            self._speeds_buf[i] = self.joints[key].motorSpeed
+        return self._speeds_buf
 
     def _get_state(self):
-        vision = self._get_state_vision()
-        tactile_map = self._get_state_tactile()
-        proprioception = self._get_state_proprio()
-        return vision, proprioception, tactile_map
+        vision = self.vision
+        positions = self.positions
+        speeds = self.speeds
+        tactile_map = self.tactile
+        return vision, positions, speeds, tactile_map
 
     state = property(_get_state)
-    proprioception = property(_get_state_proprio)
+    positions = property(_get_state_positions)
+    speeds = property(_get_state_speeds)
     vision = property(_get_state_vision)
     tactile = property(_get_state_tactile)
 
