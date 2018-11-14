@@ -39,6 +39,9 @@ class Window:
         self._tactile_lim = [[-0.1, 1.1]]
         self._proprioception_lim = [[-4, 4]]
 
+    def close(self):
+        plt.close(self.fig)
+
     def set_vision_lim(self, *lim):
         self._vision_lim = lim
         if self._axes_initialized:

@@ -34,11 +34,15 @@ def parse_box2d_protobuf(example_proto):
     return ret
 
 
+def get_dataset(path):
+    filenames = [path + '/' + f for f in os.listdir(path)]
+    dataset = tf.data.TFRecordDataset(filenames)
+    return dataset.map(map_func=parse_box2d_protobuf, num_parallel_calls=8)
+
+
 class DatabaseDisplay:
     def __init__(self, path):
-        filenames = [path + '/' + f for f in os.listdir(path)]
-        self.dataset = tf.data.TFRecordDataset(filenames)
-        self.dataset = self.dataset.map(map_func=parse_box2d_protobuf, num_parallel_calls=8)
+        self.dataset = get_dataset(path)
         self.iterator = self.dataset.make_initializable_iterator()
         self.next = self.iterator.get_next()
         self.initilalizer = self.iterator.initializer
@@ -58,6 +62,7 @@ class DatabaseDisplay:
                     stop = (n is not None and n <= 0) or (elapsed_time is not None and elapsed_time > t)
             except tf.errors.OutOfRangeError:
                 pass
+        win.close()
 
 
 def _bytelist_feature(arr):
@@ -123,4 +128,5 @@ class DatabaseWriter:
 if __name__ == "__main__":
     path = "/tmp/box2d_2018_11_14_16_06_02/"
     display = DatabaseDisplay(path)
-    display()
+    display(n=10)
+    time.sleep(10)
