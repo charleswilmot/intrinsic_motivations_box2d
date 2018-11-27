@@ -57,6 +57,32 @@ def get_dataset(path, **kwargs):
     return dataset
 
 
+def bell(x):
+    return tf.pow(tf.cos(x * np.pi), 20)
+
+
+def discretize(ten, mini, maxi, n):
+    x = tf.linspace(0.0, 1.0, n)
+    for d in ten.get_shape():
+        x = tf.expand_dims(x, 0)
+    arg = (tf.expand_dims(ten, -1) - mini) / (maxi - mini)
+    x = tf.tile(x, tf.shape(arg))
+    x = x - arg
+    return bell(x)
+
+
+def discretize_dataset(n):
+    def discretize_func(struct):
+        if "positions" in struct:
+            struct["positions"] = discretize(struct["positions"], -3.1415, 3.1415, n)
+        if "actions" in struct:
+            struct["actions"] = discretize(struct["actions"], -3.0, 3.0, n)
+        if "speeds" in struct:
+            struct["speeds"] = discretize(struct["speeds"], -3.1415, 3.1415, n)
+        return struct
+    return discretize_func
+
+
 def _bytelist_feature(arr):
     return tf.train.Feature(bytes_list=tf.train.BytesList(value=[arr.tobytes()]))
 
