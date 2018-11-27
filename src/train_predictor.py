@@ -24,18 +24,6 @@ batch_size = args.batch_size
 buffer_size = batch_size * 5
 N_DISCRETE = args.n_discrete
 
-
-def bell(x):
-    return tf.pow(tf.cos(x * np.pi), 20)
-
-
-def discretize(ten, mini, maxi, n):
-    x = tf.linspace(0.0, 1.0, n)
-    arg = (ten - mini) / (maxi - mini)
-    x = x - arg
-    return bell(x)
-
-
 dataset_t0 = database.get_dataset(path, positions=True, actions=True)
 dataset_t0 = dataset_t0.map(database.discretize_dataset(N_DISCRETE))
 dataset_t0 = dataset_t0.prefetch(5 * batch_size)
