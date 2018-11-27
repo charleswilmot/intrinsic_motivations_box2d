@@ -47,7 +47,7 @@ with tf.Session() as sess:
             print(l)
     ts = time.time()
     st = datetime.datetime.fromtimestamp(ts).strftime('%Y_%m_%d_%H_%M_%S')
-    path = saver.save(sess, args.output + "{}_skin/".format(st))
+    path = saver.save(sess, args.output + "tactile_t0__tactile_t1_{}/".format(st))
     print("Network saved under {}".format(path))
 
 with open(path + "/input_sequencs_path.txt", "w") as f:
