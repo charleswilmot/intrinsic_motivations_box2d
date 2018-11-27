@@ -2,131 +2,117 @@ import numpy as np
 import os
 import tensorflow as tf
 import time
-import viewer
+import re
 
 
-def parse_box2d_protobuf(example_proto):
-    features = {
-        'vision': tf.FixedLenFeature([], tf.string),
-        'vision_shape': tf.FixedLenFeature([], tf.string),
-        'positions': tf.FixedLenFeature([], tf.string),
-        'speeds': tf.FixedLenFeature([], tf.string),
-        'tactile_map': tf.FixedLenFeature([], tf.string),
-        'actions_arr': tf.FixedLenFeature([], tf.string),
-        'index': tf.FixedLenFeature([], tf.int64)
-    }
-    parsed_features = tf.parse_single_example(example_proto, features)
-    vision = tf.decode_raw(parsed_features["vision"], tf.uint8)
-    vision_shape = tf.decode_raw(parsed_features["vision_shape"], tf.int32)
-    positions = tf.decode_raw(parsed_features["positions"], tf.float32)
-    speeds = tf.decode_raw(parsed_features["speeds"], tf.float32)
-    tactile_map = tf.decode_raw(parsed_features["tactile_map"], tf.float32)
-    actions_arr = tf.decode_raw(parsed_features["actions_arr"], tf.float32)
-    index = tf.cast(parsed_features["index"], tf.int32)
-    ret = {
-        'vision': tf.reshape(vision, vision_shape),
-        'positions': positions,
-        'speeds': speeds,
-        'tactile_map': tactile_map,
-        'actions_arr': actions_arr,
-        'index': index
-    }
+tf_type = {
+    'vision': tf.uint8,
+    'positions': tf.float32,
+    'speeds': tf.float32,
+    'tactile_map': tf.float32,
+    'actions': tf.float32
+}
+
+
+def parse_protobuf(key, shape=None):
+    def parse(example_proto):
+        features = {key: tf.FixedLenFeature([], tf.string)}
+        parsed_features = tf.parse_single_example(example_proto, features)
+        data = tf.decode_raw(parsed_features[key], tf_type[key])
+        if key == 'vision':
+            data = tf.reshape(data, shape)
+        return {key: data}
+    return parse
+
+
+def dict_union(*args):
+    ret = {}
+    for d in args:
+        ret.update(d)
     return ret
 
 
-def get_dataset(path):
-    filenames = [path + '/' + f for f in os.listdir(path)]
-    dataset = tf.data.TFRecordDataset(filenames)
-    return dataset.map(map_func=parse_box2d_protobuf, num_parallel_calls=8)
+def add_index_key(index):
+    return {"index": index}
 
 
-class DatabaseDisplay:
-    def __init__(self, path):
-        self.dataset = get_dataset(path)
-        self.iterator = self.dataset.make_initializable_iterator()
-        self.next = self.iterator.get_next()
-        self.initilalizer = self.iterator.initializer
-
-    def __call__(self, t=None, n=None):
-        with tf.Session() as sess:
-            stop = False
-            start_time = time.time()
-            win = viewer.Window()
-            sess.run(self.initilalizer)
-            try:
-                while not stop:
-                    ret = sess.run(self.next)
-                    win.update(ret["vision"], ret["positions"], ret["speeds"], ret["tactile_map"])
-                    n = n - 1 if n is not None else None
-                    elapsed_time = time.time() - start_time if t is not None else None
-                    stop = (n is not None and n <= 0) or (elapsed_time is not None and elapsed_time > t)
-            except tf.errors.OutOfRangeError:
-                pass
-        win.close()
+def get_dataset(path, **kwargs):
+    regex = r'.*chunk([0-9]+)\.tfr'
+    filename = [x for x in os.listdir(path + '/positions') if re.match(regex, x) is not None][0]
+    regex = r"sf[0-9]+.?[0-9]*_re[0-9]+_ae[0-9]+_n([0-9]+)_chunk[0-9]+.tfr"
+    n_records = int(re.match(regex, filename).group(1))
+    datasets = [tf.data.Dataset.range(n_records).map(add_index_key)]
+    regex = r'.*chunk([0-9]+)\.tfr'
+    keys = [key for key in kwargs if kwargs[key]]
+    shape = np.load(path + '/vision/shape.npz') if 'vision' in keys else None
+    for key in keys:
+        filenames = [x for x in os.listdir(path + '/' + key) if re.match(regex, x) is not None]
+        filenames.sort(key=lambda n: int(re.match(regex, n).group(1)))
+        filepaths = [path + '/' + key + '/' + f for f in filenames]
+        dataset = tf.data.TFRecordDataset(filepaths)
+        dataset = dataset.map(map_func=parse_protobuf(key, shape), num_parallel_calls=8)
+        datasets.append(dataset)
+    dataset = tf.data.Dataset.zip(tuple(datasets))
+    dataset = dataset.map(dict_union)
+    return dataset
 
 
 def _bytelist_feature(arr):
     return tf.train.Feature(bytes_list=tf.train.BytesList(value=[arr.tobytes()]))
 
 
-def _int64list_feature(value):
-    return tf.train.Feature(int64_list=tf.train.Int64List(value=value))
-
-
 class DatabaseWriter:
-    def __init__(self, path, filename_pattern="chunk_{}.tfrecord", chunk_size=1e10):
+    def __init__(self, path, simulation_freq, record_every, action_every, n_record, chunk_size=1e10):
         self.path = path
-        os.mkdir(path)
-        self.filename_pattern = filename_pattern
         self.chunk_size = chunk_size
-        self._count = 0
-        self._current_chunk_size = 0
-        self._chunk_number = 0
-        self._writer = self._get_writer()
-
-    def _get_writer(self):
-        return tf.python_io.TFRecordWriter(self.path + '/' + self.filename_pattern.format(self._chunk_number))
-
-    def _write(self, string):
-        if self._current_chunk_size > self.chunk_size:
-            self._writer.close()
-            self._chunk_number += 1
-            self._current_chunk_size = 0
-            self._writer = self._get_writer()
-        self._writer.write(string)
-
-    def _serialize(self, vision, positions, speeds, tactile_map, actions):
-        actions_arr = np.array([actions[key] for key in sorted(actions)], dtype=np.float32)
-        if len(actions_arr) != len(speeds):
-            raise ValueError("Number of action to be stored in DB is incorrect")
-        feature = {
-            'vision': _bytelist_feature(vision.astype(np.uint8)),
-            'vision_shape': _bytelist_feature(np.array(vision.shape).astype(np.int32)),
-            'positions': _bytelist_feature(positions.astype(np.float32)),
-            'speeds': _bytelist_feature(speeds.astype(np.float32)),
-            'tactile_map': _bytelist_feature(tactile_map.astype(np.float32)),
-            'actions_arr': _bytelist_feature(actions_arr.astype(np.float32)),
-            'index': _int64list_feature([self._count])
+        self._filename_pattern = \
+            "sf{}_re{}_ae{}_n{}_".format(simulation_freq, record_every, action_every, n_record) + "chunk{}.tfr"
+        self._keys = ["vision", "positions", "speeds", "actions", "tactile_map"]
+        self._current_chunk_size = {key: 0 for key in self._keys}
+        self._chunk_number = {key: 0 for key in self._keys}
+        os.mkdir(path)
+        for key in self._keys:
+            os.mkdir(path + "/" + key)
+        self._writers = {key: self._get_writer(key) for key in self._keys}
+        self._features = {
+            'vision': lambda data: _bytelist_feature(data.astype(np.uint8)),
+            'positions': lambda data: _bytelist_feature(data.astype(np.float32)),
+            'speeds': lambda data: _bytelist_feature(data.astype(np.float32)),
+            'tactile_map': lambda data: _bytelist_feature(data.astype(np.float32)),
+            'actions': lambda data: _bytelist_feature(data.astype(np.float32))
         }
-        example = tf.train.Example(features=tf.train.Features(feature=feature))
-        self._count += 1
-        ret = example.SerializeToString()
-        self._current_chunk_size += len(ret)
-        return ret
+        self._write_shape_to_disk = True
 
-    def __call__(self, vision, positions, speeds, tactile_map, actions):
-        string = self._serialize(vision, positions, speeds, tactile_map, actions)
-        self._write(string)
+    def _get_writer(self, key):
+        path = self.path + '/' + key + '/' + self._filename_pattern.format(self._chunk_number[key])
+        return tf.python_io.TFRecordWriter(path)
+
+    def _write(self, key, string):
+        if self._current_chunk_size[key] > self.chunk_size:
+            self._writers[key].close()
+            self._chunk_number[key] += 1
+            self._current_chunk_size[key] = 0
+            self._writers[key] = self._get_writer(key)
+        self._writers[key].write(string)
+        self._current_chunk_size[key] += len(string)
+
+    def _serialize(self, key, data):
+        feature = {key: self._features[key](data)}
+        example = tf.train.Example(features=tf.train.Features(feature=feature))
+        return example.SerializeToString()
+
+    def __call__(self, **kwargs):
+        if self._write_shape_to_disk:
+            self._write_shape_to_disk = False
+            with open(self.path + '/vision/shape.npz', "wb") as f:
+                np.save(f, np.array(kwargs["vision"].shape, dtype=np.int32))
+        for key in self._keys:
+            self._write(key, self._serialize(key, kwargs[key]))
+        # store vision shape in a text file or so...
 
     def __enter__(self):
         return self
 
     def __exit__(self, type, value, traceback):
-        self._writer.close()
-
-
-if __name__ == "__main__":
-    path = "/tmp/box2d_2018_11_14_16_06_02/"
-    display = DatabaseDisplay(path)
-    display(n=10)
-    time.sleep(10)
+        for key in self._writers:
+            self._writers[key].close()

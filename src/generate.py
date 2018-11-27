@@ -88,23 +88,33 @@ env = environment.Environment(
     dt=1 / args.simulation_freq)
 
 
-filename_pattern = "sf{}_re{}_ae{}_".format(args.simulation_freq, args.record_every, args.action_every) + "chunk{}.tfr"
-
 n_hash = -1
-with database.DatabaseWriter(args.output, filename_pattern=filename_pattern, chunk_size=args.chunk_size) as write:
+def display_loading_bar(record_number):
+    global n_hash
+    n_hash_new = int(50 * record_number / args.n_record)
+    if n_hash_new != n_hash:
+        print(" |" + "#" * n_hash_new + " " * (50 - n_hash_new) + "|", end='\r')
+        n_hash = n_hash_new
+
+
+def random_action():
+    return {
+        "Arm1_to_Arm2_Left": np.random.uniform(-3.14, 3.14),
+        "Ground_to_Arm1_Left": np.random.uniform(-3.14, 3.14),
+        "Arm1_to_Arm2_Right": np.random.uniform(-3.14, 3.14),
+        "Ground_to_Arm1_Right": np.random.uniform(-3.14, 3.14)
+    }
+
+
+dbwritter_args = args.output, args.simulation_freq, args.record_every, args.action_every, args.n_record, args.chunk_size
+with database.DatabaseWriter(*dbwritter_args) as write:
     for record_number in range(args.n_record):
-        n_hash_new = int(20 * record_number / args.n_record)
-        if n_hash_new != n_hash:
-            print(" |" + "#" * n_hash_new + " " * (20 - n_hash_new) + "|", end='\r')
-            n_hash = n_hash_new
+        display_loading_bar(record_number)
         if record_number % args.action_every == 0:
-            actions = {
-                "Arm1_to_Arm2_Left": np.random.uniform(-1, 1),
-                "Ground_to_Arm1_Left": np.random.uniform(-1, 1),
-                "Arm1_to_Arm2_Right": np.random.uniform(-1, 1),
-                "Ground_to_Arm1_Right": np.random.uniform(-1, 1)
-            }
+            actions = random_action()
             env.set_positions(actions)
-        write(*env.state, actions)
+        vision, positions, speeds, tactile_map = env.state
+        actions_arr = np.array([actions[key] for key in sorted(actions)], dtype=np.float32)
+        write(vision=vision, positions=positions, speeds=speeds, tactile_map=tactile_map, actions=actions_arr)
         for j in range(args.record_every):
             env.step()
