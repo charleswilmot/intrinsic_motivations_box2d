@@ -23,8 +23,9 @@ path = args.input
 batch_size = args.batch_size
 buffer_size = batch_size * 5
 N_DISCRETE = args.n_discrete
+tactile_map_length = np.load(args.input + "/tactile_map/length.npy")
 
-dataset_t0 = database.get_dataset(path, positions=True, actions=True)
+dataset_t0 = database.get_dataset(path, positions=True, actions=True, tactile_map=True)
 dataset_t0 = dataset_t0.map(database.discretize_dataset(N_DISCRETE))
 dataset_t0 = dataset_t0.prefetch(5 * batch_size)
 dataset_t1 = dataset_t0.skip(1)
@@ -36,27 +37,34 @@ dataset = dataset.repeat()
 iterator = dataset.make_initializable_iterator()
 batch_t0, batch_t1 = iterator.get_next()
 
-discrete_positions = [tf.squeeze(x, axis=1) for x in tf.split(batch_t0["positions"], 4, axis=1)]
-discrete_actions = [tf.squeeze(x, axis=1) for x in tf.split(batch_t0["actions"], 4, axis=1)]
-discrete_positions_target = [tf.squeeze(x, axis=1) for x in tf.split(batch_t1["positions"], 4, axis=1)]
+# size = tf.reduce_prod(tf.shape(batch_t0["positions"])[1:])
+size = 4 * N_DISCRETE
+discrete_positions = tf.reshape(batch_t0["positions"], (-1, size))
+discrete_actions = tf.reshape(batch_t0["actions"], (-1, size))
+tactile_map = batch_t0["tactile_map"]
+tactile_map_target = batch_t1["tactile_map"]
 
-joint_predictors = [predictor_maker(2 * args.n_discrete, args.n_discrete) for a in discrete_actions]
-inps = [tf.concat([p, a], axis=1) for p, a in zip(discrete_positions, discrete_actions)]
-outs = [joint_predictor(inp) for inp, joint_predictor in zip(inps, joint_predictors)]
-losses = [mse(out, target) for out, target in zip(outs, discrete_positions_target)]
-ops = [tf.train.AdamOptimizer(5e-4).minimize(loss) for loss in losses]
+inp = tf.concat([discrete_positions, discrete_actions, tactile_map], axis=-1)
+# in_size = tf.shape(inp)[-1]
+# out_size = tf.shape(tactile_map_target)[-1]
+in_size = tactile_map_length + 4 * 2 * N_DISCRETE
+out_size = tactile_map_length
+predictor = predictor_maker(in_size, out_size)
+out = predictor(inp)
+loss = mse(out, tactile_map_target)
+op = tf.train.AdamOptimizer(5e-4).minimize(loss)
 
 saver = tf.train.Saver()
 
 with tf.Session() as sess:
     sess.run([iterator.initializer, tf.global_variables_initializer()])
     for i in range(args.n_batches):
-        _, l = sess.run([ops, losses])
+        _, l = sess.run([op, loss])
         if i % 200 == 0:
             print(l)
     ts = time.time()
     st = datetime.datetime.fromtimestamp(ts).strftime('%Y_%m_%d_%H_%M_%S')
-    path = saver.save(sess, args.output + "joint_t0__joint_t1_{}_nd{}/".format(st, args.n_discrete))
+    path = saver.save(sess, args.output + "joint_t0_tactile_t0__tactile_t1_{}_nd{}/".format(st, args.n_discrete))
     print("Network saved under {}".format(path))
 
 with open(path + "/input_sequencs_path.txt", "w") as f:
