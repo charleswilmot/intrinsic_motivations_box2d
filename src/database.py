@@ -83,6 +83,16 @@ def discretize_dataset(n):
     return discretize_func
 
 
+def uint8_to_float32(x):
+    return tf.cast(x, tf.float32) / 127.5 - 1
+
+
+def vision_to_float32(struct):
+    if "vision" in struct:
+        struct["vision"] = uint8_to_float32(struct["vision"])
+    return struct
+
+
 def _bytelist_feature(arr):
     return tf.train.Feature(bytes_list=tf.train.BytesList(value=[arr.tobytes()]))
 
