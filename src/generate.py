@@ -118,3 +118,5 @@ with database.DatabaseWriter(*dbwritter_args) as write:
         write(vision=vision, positions=positions, speeds=speeds, tactile_map=tactile_map, actions=actions_arr)
         for j in range(args.record_every):
             env.step()
+
+np.save(args.output + "/tactile_map/length.npy", actile_map.shape[0])
