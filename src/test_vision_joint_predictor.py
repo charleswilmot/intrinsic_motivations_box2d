@@ -42,6 +42,7 @@ saver = tf.train.Saver()
 
 losses_per_joint = np.zeros((n_records, 4))
 
+
 with tf.Session() as sess:
     sess.run(iterator.initializer)
     saver.restore(sess, args.network_path)
