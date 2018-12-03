@@ -219,6 +219,31 @@ class DiscreteJointPositionIAX:
             self.__initaxes__(position, target, prev)
 
 
+class DoubleVisionWindow:
+    def __init__(self):
+        self.fig = plt.figure()
+        self.iax_vision1 = VisionIAX(self.fig.add_subplot(211))
+        self.iax_vision2 = VisionIAX(self.fig.add_subplot(212))
+        self._fig_shawn = False
+
+    def close(self):
+        plt.close(self.fig)
+
+    def set_vision_lim(self, *lim):
+        self.iax_vision1.set_lim(*lim)
+        self.iax_vision2.set_lim(*lim)
+
+    def update(self, vision1, vision2):
+        self.iax_vision1(vision1)
+        self.iax_vision2(vision2)
+        if self._fig_shawn:
+            self.fig.canvas.draw()
+            self.fig.canvas.flush_events()
+        else:
+            self.fig.show()
+            self._fig_shawn = True
+
+
 class VisionJointsSkinWindow:
     def __init__(self):
         self.fig = plt.figure()
