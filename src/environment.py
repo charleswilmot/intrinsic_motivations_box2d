@@ -96,7 +96,7 @@ class Environment(object):
 
     def _get_state_speeds(self):
         for i, key in enumerate(self._joint_keys):
-            self._speeds_buf[i] = self.joints[key].motorSpeed
+            self._speeds_buf[i] = self.joints[key].speed
         return self._speeds_buf
 
     def _get_state(self):
