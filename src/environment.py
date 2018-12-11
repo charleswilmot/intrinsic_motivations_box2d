@@ -4,6 +4,7 @@ import jsonpybox2d as json2d
 import numpy as np
 import tactile_map as tm
 import pid
+from PIL import Image, ImageDraw
 
 
 class Environment(object):
@@ -113,7 +114,7 @@ class Environment(object):
     tactile = property(_get_state_tactile)
 
 
-class Renderer:
+class RendererOld:
     def __init__(self, bodies, xlim, ylim, dpi, tactile_bodies_names=[]):
         self.bodies = bodies
         self.tactile_bodies_names = tactile_bodies_names
@@ -149,10 +150,44 @@ class Renderer:
         return buf
 
 
+class Renderer:
+    def __init__(self, bodies, xlim, ylim, dpi, tactile_bodies_names=[]):
+        self.bodies = bodies
+        self.tactile_bodies_names = tactile_bodies_names
+        self._x_lim = xlim
+        self._y_lim = ylim
+        self._max_x = int(dpi * (xlim[1] - xlim[0]))
+        self._max_y = int(dpi * (ylim[1] - ylim[0]))
+        self.shape = [self._max_x, self._max_y]
+        self.dpi = dpi
+        self.reset_buffer()
+
+    def reset_buffer(self):
+        self.buffer = Image.new('RGB', self.shape, (255, 255, 255))
+        self.draw = ImageDraw.Draw(self.buffer)
+
+    def point_to_pix(self, point):
+        x, y = point
+        X = self._max_x * (x - self._x_lim[0]) / (self._x_lim[1] - self._x_lim[0])
+        Y = self._max_y * (y - self._y_lim[0]) / (self._y_lim[1] - self._y_lim[0])
+        return X, Y
+
+    def step(self):
+        self.reset_buffer()
+        for key in self.bodies:
+            body = self.bodies[key]
+            touching = [ce.contact.touching for ce in body.contacts if ce.contact.touching]
+            vercs = np.vstack(body.fixtures[0].shape.vertices)
+            data = [self.point_to_pix(body.GetWorldPoint(x)) for x in vercs]
+            color = (255, 0, 0) if len(touching) > 0 and key in self.tactile_bodies_names else (0, 0, 255)
+            self.draw.polygon(data, fill=color)
+        return np.asarray(self.buffer)
+
+
 if __name__ == "__main__":
     import viewer
 
-    win = viewer.Window()
+    win = viewer.VisionJointsSkinWindow()
 
     skin_order = [
         ("Arm1_Left", 0),
@@ -170,15 +205,22 @@ if __name__ == "__main__":
     ylim = [-13.5, 13.5]
     env = Environment("../models/two_arms.json", skin_order, skin_resolution, xlim, ylim, dpi=10, dt=1 / 150.0)
 
-    for i in range(100):
+    for i in range(1000):
         actions = {
-            "Arm1_to_Arm2_Left": np.random.uniform(-1, 1),
-            "Ground_to_Arm1_Left": np.random.uniform(-1, 1),
-            "Arm1_to_Arm2_Right": np.random.uniform(-1, 1),
-            "Ground_to_Arm1_Right": np.random.uniform(-1, 1)
+            "Arm1_to_Arm2_Left": np.random.uniform(-2.3, 2.3),
+            "Ground_to_Arm1_Left": np.random.uniform(-3.14, 3.14),
+            "Arm1_to_Arm2_Right": np.random.uniform(-2.3, 2.3),
+            "Ground_to_Arm1_Right": np.random.uniform(-3.14, 3.14)
         }
         env.set_positions(actions)
-        for j in range(300):
-            if j % 10 == 0:
+        for j in range(1000):
+            if j % 100 == 0:
                 win.update(*env.state)
             env.step()
+        # for key in env.joint_pids:
+        #     speed1 = env.joint_pids[key].output
+        #     speed2 = env.joints[key].speed
+        #     if np.abs(speed1) > 0.1:
+        #         print("PID", key, speed1)
+        #     if np.abs(speed2) > 0.001:
+        #         print("ENV", key, speed2)
