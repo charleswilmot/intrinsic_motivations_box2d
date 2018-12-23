@@ -119,4 +119,4 @@ with database.DatabaseWriter(*dbwritter_args) as write:
         for j in range(args.record_every):
             env.step()
 
-np.save(args.output + "/tactile_map/length.npy", actile_map.shape[0])
+np.save(args.output + "/tactile_map/length.npy", tactile_map.shape[0])
