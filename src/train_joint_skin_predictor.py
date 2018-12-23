@@ -27,12 +27,12 @@ tactile_map_length = np.load(args.input + "/tactile_map/length.npy")
 
 dataset_t0 = database.get_dataset(path, positions=True, actions=True, tactile_map=True)
 dataset_t0 = dataset_t0.map(database.discretize_dataset(N_DISCRETE))
-dataset_t0 = dataset_t0.prefetch(5 * batch_size)
 dataset_t1 = dataset_t0.skip(1)
 dataset = tf.data.Dataset.zip((dataset_t0, dataset_t1))
-dataset = dataset.batch(batch_size)
-dataset = dataset.shuffle(buffer_size=buffer_size)
 dataset = dataset.repeat()
+dataset = dataset.batch(batch_size)
+dataset = dataset.shuffle(buffer_size=100)
+dataset = dataset.prefetch(10)
 
 iterator = dataset.make_initializable_iterator()
 batch_t0, batch_t1 = iterator.get_next()
@@ -56,12 +56,17 @@ op = tf.train.AdamOptimizer(5e-4).minimize(loss)
 
 saver = tf.train.Saver()
 
+mean_loss = 0
+display_every = 200
+
 with tf.Session() as sess:
     sess.run([iterator.initializer, tf.global_variables_initializer()])
     for i in range(args.n_batches):
         _, l = sess.run([op, loss])
-        if i % 200 == 0:
-            print(l)
+        mean_loss += l
+        if i % display_every == 0 and i != 0:
+            print("batch {}: {}".format(i, mean_loss / display_every))
+            mean_loss = 0
     ts = time.time()
     st = datetime.datetime.fromtimestamp(ts).strftime('%Y_%m_%d_%H_%M_%S')
     path = saver.save(sess, args.output + "joint_t0_tactile_t0__tactile_t1_{}_nd{}/".format(st, args.n_discrete))

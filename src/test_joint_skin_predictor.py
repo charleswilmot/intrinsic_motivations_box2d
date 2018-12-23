@@ -62,7 +62,7 @@ with tf.Session() as sess:
         pass
     rturn = future_return(losses, args.gamma)
     win = viewer.VisionSkinReturnWindow(rturn)
-    win.set_return_lim([0, 0.2])
+    win.set_return_lim([-0.002, 0.02])
     sess.run(iterator.initializer)
     contact_last = False
     try:
