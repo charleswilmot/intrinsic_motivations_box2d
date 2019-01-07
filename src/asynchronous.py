@@ -1,4 +1,5 @@
 import threading
+import queue
 # from multiprocessing import Process
 # from subprocess import Popen
 import numpy as np
@@ -7,6 +8,7 @@ from numpy.random import normal
 import tensorflow as tf
 import tensorflow.contrib.layers as tl
 import time
+import viewer
 
 
 class profile:
@@ -143,10 +145,11 @@ class A3CCriticMLP(GraphLeaf):
                 prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), **self.tlkwargs)
         with tf.variable_scope("private_to_critic"):
             self.logits = tl.fully_connected(prev_layer, net_dim[-1], activation_fn=None, scope="output", **self.tlkwargs)
-            self.logits = tf.squeeze(self.logits, squeeze_dims=[1], name="logits")
+            self.logits = tf.squeeze(self.logits, axis=1, name="logits")
         self.losses = tf.squared_difference(self.logits, self.targets)
         self.loss = tf.reduce_sum(self.losses, name="loss")
-        self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
+        # self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
+        self.optimizer = tf.train.AdamOptimizer()
 
 
 class A3CMLP(GraphNode):
@@ -215,6 +218,7 @@ class Worker:
         self.min_global_updates = min_global_updates
         self.env_step_length = env_step_length
         self.sequence_length = sequence_length
+        self.display_queue = queue.Queue()
         with tf.variable_scope(name):
             self.local_graph = global_graph.copy()
         local_rl_graph = self.local_graph.reinforcement_learning
@@ -236,13 +240,13 @@ class Worker:
         # transforms the inputs into a feed dict for the actor
         raise NotImplementedError("This method must be overwritten.")
 
-    def to_critic_feed_dict(self, **kwargs):
-        # transforms the inputs into a feed dict for the actor
-        raise NotImplementedError("This method must be overwritten.")
-
     def to_model_feed_dict(self, **kwargs):
         # transforms the inputs into a feed dict for the actor
         raise NotImplementedError("This method must be overwritten.")
+
+    def to_window(self, states, actions, rewards, visions, returns, predicted_rturn):
+        # raise NotImplementedError("This method must be overwritten.")
+        return None
 
     def environment_step(self):
         for _ in range(self.env_step_length):
@@ -279,64 +283,68 @@ class Worker:
             except tf.errors.CancelledError:
                 return
 
+    def get_action(self, sess):
+        rl_state = self.get_rl_state()
+        feed_dict = self.to_rl_feed_dict(states=[rl_state])
+        action = sess.run(self.local_graph.reinforcement_learning.actor.sample, feed_dict=feed_dict)
+        return action[0]
+
     def run_n_rl_steps(self, sess):
         states = []
         actions = []
         rewards = []
-        local_rl_graph = self.local_graph.reinforcement_learning
+        visions = []
         t_state = 0
         t_actor = 0
         t_reward = 0
         t_env = 0
         for _ in range(self.sequence_length):
+            # get vision
+            visions.append(self.env.vision)
             # get state
             t0 = time.time()
             model_state = self.get_model_state()
-            rl_state = self.get_rl_state()
-            states.append(rl_state)
+            states.append(self.get_rl_state())
             # get action
             t1 = time.time()
-            feed_dict = self.to_rl_feed_dict(states=[rl_state])
-            action = sess.run(local_rl_graph.actor.sample, feed_dict=feed_dict)
-            actions.append(action[0])
-            # get reward
+            action = self.get_action(sess)
+            actions.append(action)
+            # set action
             t2 = time.time()
-            action_dict = actions_dict_from_array(action[0])
+            action_dict = actions_dict_from_array(action)
             env.set_positions(action_dict)
+            # run environment step
             self.environment_step()
+            # get next state
             model_state_next = self.get_model_state()
+            # get reward
             t3 = time.time()
             feed_dict = self.to_model_feed_dict(states=[model_state, model_state_next], targets=True)
             neg_reward = sess.run(self.local_graph.model.loss, feed_dict=feed_dict)
             rewards.append(- neg_reward)
-            # run action in env
             t4 = time.time()
             t_state += 1000 * (t1 - t0)
             t_actor += 1000 * (t2 - t1)
             t_env += 1000 * (t3 - t2)
             t_reward += 1000 * (t4 - t3)
         # print(self.name + " profiling run_n_model_steps: get_state {:.1f}ms  actor {:.1f}ms  reward {:.1f}ms  env {:.1f}ms".format(t_state, t_actor, t_reward, t_env))
-        return states, actions, rewards
+        return states, actions, rewards, visions
 
     def run_n_model_steps(self, sess):
         states = []
-        local_rl_graph = self.local_graph.reinforcement_learning
         t_state = 0
         t_actor = 0
         t_env = 0
         for _ in range(self.sequence_length):
             # get state
             t0 = time.time()
-            model_state = self.get_model_state()
-            states.append(model_state)
-            rl_state = self.get_rl_state()
+            states.append(self.get_model_state())
             # get action
             t1 = time.time()
-            feed_dict = self.to_rl_feed_dict(states=[rl_state])
-            action = sess.run(local_rl_graph.actor.sample, feed_dict=feed_dict)
+            action = self.get_action(sess)
             # run action in env
             t2 = time.time()
-            action_dict = actions_dict_from_array(action[0])
+            action_dict = actions_dict_from_array(action)
             env.set_positions(action_dict)
             self.environment_step()
             t3 = time.time()
@@ -346,13 +354,24 @@ class Worker:
         # print(self.name + " profiling run_n_model_steps: get_state {:.1f}ms  actor {:.1f}ms  env {:.1f}ms".format(t_state, t_actor, t_env))
         return states
 
-    def update_reinforcement_learning(self, sess, coord, states, actions, rewards):
+    def rewards_to_return(self, rewards, prev_return):
+        returns = np.zeros_like(rewards)
+        for i in range(len(rewards) - 1, -1, -1):
+            r = rewards[i]
+            prev_return = r + self.discount_factor * prev_return
+            returns[i] = prev_return
+        return returns
+
+    def update_reinforcement_learning(self, sess, coord, states, actions, rewards, visions):
         rl_graph = self.local_graph.reinforcement_learning
         feed_dict = self.to_rl_feed_dict(states=states)
         predicted_returns = sess.run(rl_graph.critic.logits, feed_dict=feed_dict)
-        feed_dict = self.to_rl_feed_dict(states=states, actions=actions, rewards=rewards, predicted_returns=predicted_returns)
+        returns = self.rewards_to_return(rewards, predicted_returns[-1])
+        feed_dict = self.to_rl_feed_dict(states=states, actions=actions, returns=returns, predicted_returns=predicted_returns)
         fetches = [rl_graph.actor.loss, rl_graph.critic.loss, rl_graph.inc_update_count, self.upload_train_rl_vars, rl_graph.actor.log_probs]
         aloss, closs, n_model_global_updates, _, log_prob = sess.run(fetches, feed_dict=feed_dict)
+        # Display environment
+        self.display_queue.put(self.to_window(states, actions, rewards, visions, returns, predicted_returns))
         print("{} finished update number {} (actor loss = {:.3f}     critic loss = {:.3f})".format(self.name, n_model_global_updates, aloss, closs))
         if n_model_global_updates >= self.min_global_updates:
             coord.request_stop()
@@ -373,7 +392,7 @@ class JointAgentWorker(Worker):
     def get_rl_state(self):
         return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
 
-    def to_rl_feed_dict(self, states=None, actions=None, rewards=None, predicted_returns=None):
+    def to_rl_feed_dict(self, states=None, actions=None, returns=None, predicted_returns=None):
         # transforms the inputs into a feed dict for the actor
         actor = self.local_graph.reinforcement_learning.actor
         critic = self.local_graph.reinforcement_learning.critic
@@ -386,21 +405,11 @@ class JointAgentWorker(Worker):
         if actions is not None:
             np_actions = np.array(actions)
             feed_dict[actor.actions] = np_actions
-        if rewards is not None and predicted_returns is not None:
+        if returns is not None and predicted_returns is not None:
             # reverse pass through the rewards here...
-            returns = np.zeros_like(rewards)
-            prev_return = predicted_returns[-1]
-            for i in range(len(rewards) - 1, -1, -1):
-                r = rewards[i]
-                prev_return = r + self.discount_factor * prev_return
-                returns[i] = prev_return
             feed_dict[critic.targets] = returns
             feed_dict[actor.targets] = returns - predicted_returns
         return feed_dict
-
-    def to_critic_feed_dict(self, **kwargs):
-        # transforms the inputs into a feed dict for the actor
-        raise NotImplementedError("This method must be overwritten.")
 
     def to_model_feed_dict(self, states, targets=False):
         model = self.local_graph.model
@@ -414,6 +423,12 @@ class JointAgentWorker(Worker):
         else:
             feed_dict[model.inputs] = np.reshape(np_states, new_shape_all)
         return feed_dict
+
+    def to_window(self, states, actions, rewards, visions, returns, predicted_rturn):
+        positions = [x[0] for x in states]
+        targets = [x[2] for x in states]
+        prevs = positions
+        return visions, positions, targets, prevs, returns, predicted_rturn
 
 
 if __name__ == "__main__":
@@ -444,9 +459,14 @@ if __name__ == "__main__":
 
     with tf.device('/cpu:0'):
         workers = []
-        for i in range(16):
-            env = environment.Environment("../models/two_arms.json", skin_order, skin_resolution, xlim, ylim, dpi=10, dt=1 / 150.0)
-            workers.append(JointAgentWorker("worker_{}".format(i), env, ja, 0.2, 1000, 20, 128))
+        windows = []
+        for i in range(4):
+            env = environment.Environment("../models/two_arms.json", skin_order, skin_resolution, xlim, ylim, dpi=1, dt=1 / 150.0)
+            workers.append(JointAgentWorker("worker_{}".format(i), env, ja, 0.2, 300, 500, 64))
+            win = viewer.JointAgentWindow()
+            win.set_return_lim((-0.2, 0))
+            windows.append(win)
+        queues = [w.display_queue for w in workers]
 
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
@@ -471,4 +491,14 @@ if __name__ == "__main__":
             t = threading.Thread(target=target_run_rl)
             t.start()
             worker_threads.append(t)
+        all_queue_empty = False
+        while not (coord.should_stop() and all_queue_empty):
+            all_queue_empty = True
+            for i in range(len(workers)):
+                q = queues[i]
+                if not q.empty():
+                    all_queue_empty = False
+                    while not q.empty():
+                        data = q.get(block=False)
+                    windows[i](*data)
         coord.join(worker_threads)

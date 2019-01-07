@@ -143,6 +143,13 @@ class ReturnIAX:
         self._axes_initialized = False
         self._return = rturn.reshape((rturn.shape[0], -1))
         self._maxi = self._return.shape[0]
+        self._n_lines = self._return.shape[-1]
+
+    def set_return(self, rturn):
+        self._return = rturn.reshape((rturn.shape[0], -1))
+        if self._return.shape[-1] != self._n_lines:
+            raise ValueError("The passed return array does not have the correct amount of columns")
+        self._maxi = self._return.shape[0]
 
     def _get_absolute_slice(self, index):
         start = max(0, index + self._range[0])
@@ -151,7 +158,7 @@ class ReturnIAX:
 
     def _get_relative_slice(self, index):
         start = max(0, - index - self._range[0])
-        stop = min(self._range[1] - self._range[0], self._maxi - index - 1 + self._range[0])
+        stop = min(self._range[1] - self._range[0], self._maxi - index + self._range[1])
         return slice(start, stop)
 
     def _get_data(self, index):
@@ -179,8 +186,9 @@ class ReturnIAX:
 
     def __call__(self, index):
         if self._axes_initialized:
+            all_data = self._get_data(index)
             for i, line in enumerate(self._lines):
-                data = self._get_data(index)[:, i]
+                data = all_data[:, i]
                 line.set_ydata(data)
         else:
             self.__initaxes__(index)
@@ -409,6 +417,67 @@ class DatabaseDisplay:
             except tf.errors.OutOfRangeError:
                 pass
         win.close()
+
+
+class JointAgentWindow:
+    def __init__(self):
+        self.fig = plt.figure()
+        fake_initial_return_for_axes_creation = np.zeros((200, 2))
+        self.iax_vision = VisionIAX(self.fig.add_subplot(321))
+        self.iax_return = ReturnIAX(self.fig.add_subplot(322), fake_initial_return_for_axes_creation)
+        conf = [
+            (325, "Arm1_to_Arm2_Left"),
+            (326, "Arm1_to_Arm2_Right"),
+            (323, "Ground_to_Arm1_Left"),
+            (324, "Ground_to_Arm1_Right")]
+        self.iax_joints = [DiscreteJointPositionIAX(self.fig.add_subplot(num), jname) for num, jname in conf]
+        self._fig_shawn = False
+
+    def close(self):
+        plt.close(self.fig)
+
+    def set_vision_lim(self, *lim):
+        self.iax_vision.set_lim(*lim)
+
+    def set_return_lim(self, *lim):
+        self.iax_return.set_lim(*lim)
+
+    def set_return_range(self, *rnge):
+        self.iax_return.set_range(*rnge)
+
+    def set_joint_lim(self, *lim):
+        for iax in self.iax_joints:
+            iax.set_lim(*lim)
+
+    def update(self, index):
+        self.iax_vision(self.visions[index])
+        if not self.rturn_idle:
+            self.iax_return(index)
+        for position, target, prev, iax in zip(self.positions[index], self.targets[index], self.prevs[index], self.iax_joints):
+            iax(position, target, prev)
+        if self._fig_shawn:
+            self.fig.canvas.draw()
+            self.fig.canvas.flush_events()
+        else:
+            self.fig.show()
+            self._fig_shawn = True
+
+    def __call__(self, visions, positions, targets, prevs, rturn=None, predicted_rturn=None):
+        self.visions = visions
+        self.positions = positions
+        self.targets = targets
+        self.prevs = prevs
+        self.rturn_idle = True
+        if rturn is not None and predicted_rturn is not None:
+            self.rturn = np.stack((rturn, predicted_rturn), axis=1)
+            self.iax_return.set_return(self.rturn)
+            self.rturn_idle = False
+        if not len(visions) == len(positions) == len(targets) == len(prevs) == len(self.rturn):
+            lengths = [("visions", len(visions)), ("positions", len(positions)), ("targets", len(targets)), ("prevs", len(prevs)), ("return", len(self.rturn))]
+            print(lengths)
+            raise ValueError("Length are not equal")
+        for i in range(len(self.visions)):
+            self.update(i)
 
 
 if __name__ == "__main__":
