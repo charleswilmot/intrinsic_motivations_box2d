@@ -59,45 +59,6 @@ def get_available_port():
     return port
 
 
-def tensorboard_func(logdir):
-    port = get_available_port()
-    p1 = multiprocessing.Process(target=tensorboard_server_func, args=(logdir, port))
-    p1.start()
-    time.sleep(20)
-    p2 = multiprocessing.Process(target=chromium_func, args=(port,))
-    p2.start()
-    p2.join()
-    p1.terminate()
-    while p1.is_alive():
-        time.sleep(0.1)
-
-
-def parameter_server_func(cluster, task_index):
-    server = tf.train.Server(cluster, "ps", task_index)
-    server.join()
-
-
-def worker_model_func(args_env, args_worker, n_updates, task_index, done_event):
-    env = environment.Environment(*args_env)
-    worker = JointAgentWorker(task_index, done_event, env, *args_worker)
-    worker.wait_for_variables_initialization()
-    worker.run_model(n_updates)
-
-
-def worker_rl_func(args_env, args_worker, n_updates, train_actor, task_index, done_event):
-    env = environment.Environment(*args_env)
-    worker = JointAgentWorker(task_index, done_event, env, *args_worker)
-    worker.wait_for_variables_initialization()
-    worker.run_reinforcement_learning(n_updates, train_actor)
-
-
-def worker_display_func(args_env, args_worker, task_index, done_event):
-    env = environment.Environment(*args_env)
-    worker = JointAgentWorker(task_index, done_event, env, *args_worker)
-    worker.wait_for_variables_initialization()
-    worker.run_display()
-
-
 class Worker:
     def __init__(self, task_index, done_event, env, cluster, logdir, discount_factor,
                  env_step_length, sequence_length):
@@ -119,6 +80,7 @@ class Worker:
         # graph = tf.get_default_graph() if task_index == 0 else None
         graph = None
         self.summary_writer = tf.summary.FileWriter(self.logdir + "/worker{}".format(task_index), graph=graph)
+        self.saver = tf.train.Saver()
         self.sess = tf.Session(target=self.server.target)
         if task_index == 0 and len(self.sess.run(tf.report_uninitialized_variables())) > 0:
             self.sess.run(tf.global_variables_initializer())
@@ -228,7 +190,7 @@ class Worker:
         self.critic_optimizer = tf.train.AdamOptimizer(1e-3)
         self.critic_train_op = self.critic_optimizer.minimize(self.critic_loss, global_step=self.global_rl_step)
         self.rl_optimizer = tf.train.AdamOptimizer(1e-3)
-        self.rl_train_op = self.rl_optimizer.minimize(0.001 * self.actor_loss + self.critic_loss, global_step=self.global_rl_step)
+        self.rl_train_op = self.rl_optimizer.minimize(0.00001 * self.actor_loss + self.critic_loss, global_step=self.global_rl_step)
         self.actor_loss_summary = tf.summary.scalar("actor/loss", self.actor_loss)
         self.critic_loss_summary = tf.summary.scalar("critic/loss", self.critic_loss)
         self.rl_reward = tf.placeholder(shape=[None], dtype=tf.float32)
@@ -239,6 +201,14 @@ class Worker:
         while len(self.sess.run(tf.report_uninitialized_variables())) > 0:
             print("{}  waiting for variable initialization...".format(self.name))
             time.sleep(1)
+
+    def save(self, path):
+        if self.task_index == 0:
+            self.saver.save(self.sess, path)
+
+    def restore(self, path):
+        if self.task_index == 0:
+            self.saver.restore(self.sess, path)
 
     def environment_step(self):
         for _ in range(self.env_step_length):
@@ -252,6 +222,7 @@ class Worker:
             transitions = self.run_n_rl_steps()
             # Update the global networks
             global_rl_step = self.update_reinforcement_learning(*transitions, train_actor=train_actor)
+        self.summary_writer.flush()
         self.done_event.set()
         self.server.join()
 
@@ -269,6 +240,7 @@ class Worker:
             states = self.run_n_model_steps()
             # Update the global networks
             global_model_step = self.update_model(states)
+        self.summary_writer.flush()
         self.done_event.set()
         self.server.join()
 
@@ -387,7 +359,7 @@ class Worker:
         fetches = [self.actor_loss, self.critic_loss, self.global_rl_step, train_op, self.rl_summary]
         aloss, closs, global_rl_step, _, rl_summary = self.sess.run(fetches, feed_dict=feed_dict)
         self.summary_writer.add_summary(rl_summary, global_step=global_rl_step)
-        if global_rl_step < 300 and global_rl_step % 10 == 0:
+        if global_rl_step < 300 and global_rl_step % 2 == 0:
             self.summary_writer.flush()
         print("{} finished update number {} (actor loss = {:.3f}     critic loss = {:.3f})".format(
               self.name, global_rl_step, aloss, closs))
@@ -398,7 +370,7 @@ class Worker:
         fetches = [self.model_loss, self.global_model_step, self.model_train_op, self.model_summary]
         loss, global_model_step, _, model_summary = self.sess.run(fetches, feed_dict=feed_dict)
         self.summary_writer.add_summary(model_summary, global_step=global_model_step)
-        if global_model_step < 300 and global_model_step % 10 == 0:
+        if global_model_step < 300 and global_model_step % 2 == 0:
             self.summary_writer.flush()
         print("{} finished update number {} (loss = {:.3f})".format(self.name, global_model_step, loss))
         return global_model_step
@@ -496,6 +468,18 @@ class Experiment:
             self.workers_processes.append(p)
             self.workers_events.append(multiprocessing.Event())
 
+    def _define_workers_save_processes(self, path):
+        for i in range(self.n_workers):
+            p = multiprocessing.Process(target=self.worker_save_func, args=(i, path), daemon=True)
+            self.workers_processes.append(p)
+            self.workers_events.append(multiprocessing.Event())
+
+    def _define_workers_restore_processes(self, path):
+        for i in range(self.n_workers):
+            p = multiprocessing.Process(target=self.worker_restore_func, args=(i, path), daemon=True)
+            self.workers_processes.append(p)
+            self.workers_events.append(multiprocessing.Event())
+
     def worker_display_func(self):
         env = environment.Environment(*self.args_env_display)
         worker = self.WorkerCls(0, self.display_event, env, *self.args_worker)
@@ -527,6 +511,18 @@ class Experiment:
         worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker)
         worker.wait_for_variables_initialization()
         worker.run_reinforcement_learning(n_updates, train_actor)
+
+    def worker_save_func(self, task_index, path):
+        env = environment.Environment(*self.args_env)
+        worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker)
+        worker.wait_for_variables_initialization()
+        worker.save(path)
+
+    def worker_save_func(self, task_index, path):
+        env = environment.Environment(*self.args_env)
+        worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker)
+        worker.wait_for_variables_initialization()
+        worker.restore(path)
 
     def __enter__(self):
         self.start_parameter_servers()
@@ -580,6 +576,14 @@ class Experiment:
 
     def asynchronously_run_reinforcement_learning(self, n_updates, train_actor=True):
         self._define_workers_rl_processes(n_updates, train_actor=train_actor)
+        self._start_workers_processes()
+
+    def save_model(self, name):
+        self._define_workers_save_processes(self.checkpointsdir + '/{}'.format(name))
+        self._start_workers_processes()
+
+    def restore_model(self, name):
+        self._define_workers_restore_processes(self.checkpointsdir + '/{}'.format(name))
         self._start_workers_processes()
 
     def _start_workers_processes(self):
@@ -638,13 +642,12 @@ if __name__ == "__main__":
     n_discrete = 32
 
     discount_factor = 0.85
-    min_global_updates = 100
     env_step_length = 15
-    sequence_length = 64  # 1024  # 64
+    sequence_length = 1024  # 64
     logdir = TemporaryDirectory()
 
     N_WORKERS = 8
-    N_PARAMETER_SERVERS = 1
+    N_PARAMETER_SERVERS = 2
 
     cluster = get_cluster(N_PARAMETER_SERVERS, N_WORKERS)
     args_env = (json_model, skin_order, skin_resolution, xlim, ylim, dpi, dt, n_discrete)
@@ -656,129 +659,6 @@ if __name__ == "__main__":
             "/tmp/exp_test", args_env, args_worker, display_dpi=3) as experiment:
         experiment.start_tensorboard()
         experiment.start_display_worker()
-        experiment.asynchronously_run_model(100)
-        experiment.asynchronously_run_reinforcement_learning(50, train_actor=False)
-        experiment.asynchronously_run_reinforcement_learning(50, train_actor=True)
-
-    print(1 / 0)
-
-    # Start TensorBoard
-    # experiment.start_tensorboard()
-    tensorboard_process = multiprocessing.Process(
-        target=tensorboard_func,
-        args=(logdir.name, )
-    )
-    tensorboard_process.start()
-
-    # Define parameter servers processes
-    # experiment.start_parameter_servers_and_display_worker(display=True)
-    parameter_servers_processes = []
-    for i in range(N_PARAMETER_SERVERS):
-        parameter_servers_processes.append(multiprocessing.Process(
-            target=parameter_server_func,
-            args=(cluster, i),
-            daemon=True
-        ))
-
-    # Define workers processes
-    # experiment.asynchronously_run_model()
-    workers_processes = []
-    workers_events = []
-    for i in range(N_WORKERS - 1):
-        done_event = multiprocessing.Event()
-        workers_events.append(done_event)
-        workers_processes.append(multiprocessing.Process(
-            target=worker_model_func,
-            args=(args_env, args_worker, min_global_updates, i, done_event),
-            daemon=True
-        ))
-
-    # Define the display process
-    dpi = 3
-    args_env = (json_model, skin_order, skin_resolution, xlim, ylim, dpi, dt, n_discrete)
-    display_done_event = multiprocessing.Event()
-    display_process = multiprocessing.Process(
-        target=worker_display_func,
-        args=(args_env, args_worker, N_WORKERS - 1, display_done_event),
-        daemon=True
-    )
-
-    all_processes = parameter_servers_processes + workers_processes + [display_process]
-    # Start all processes
-    for p in all_processes:
-        p.start()
-
-    # Wait for the workers
-    for done_event in workers_events:
-        done_event.wait()
-
-    # Terminate the model workers
-    for p in workers_processes:
-        p.terminate()
-        while p.is_alive():
-            print("Process still alive... waiting")
-            time.sleep(0.1)
-
-    # Define workers processes
-    # experiment.asynchronously_run_reinforcement_learning(train_actor=False)
-    dpi = 1
-    args_env = (json_model, skin_order, skin_resolution, xlim, ylim, dpi, dt, n_discrete)
-    train_actor = False
-    workers_processes = []
-    workers_events = []
-    for i in range(N_WORKERS - 1):
-        done_event = multiprocessing.Event()
-        workers_events.append(done_event)
-        workers_processes.append(multiprocessing.Process(
-            target=worker_rl_func,
-            args=(args_env, args_worker, min_global_updates, train_actor, i, done_event),
-            daemon=True
-        ))
-
-    # Start the reinforcement learning workers
-    for p in workers_processes:
-        p.start()
-
-    # Wait for the workers
-    for done_event in workers_events:
-        done_event.wait()
-
-    # Terminate the model workers
-    for p in workers_processes:
-        p.terminate()
-        while p.is_alive():
-            time.sleep(0.1)
-
-    # experiment.asynchronously_run_reinforcement_learning(train_actor=True)
-    train_actor = True
-    workers_processes = []
-    workers_events = []
-    for i in range(N_WORKERS - 1):
-        done_event = multiprocessing.Event()
-        workers_events.append(done_event)
-        workers_processes.append(multiprocessing.Process(
-            target=worker_rl_func,
-            args=(args_env, args_worker, min_global_updates, train_actor, i, done_event),
-            daemon=True
-        ))
-
-    all_processes = parameter_servers_processes + workers_processes + [display_process]
-    # Start the reinforcement learning workers
-    for p in workers_processes:
-        p.start()
-
-    # Wait for the workers
-    for done_event in workers_events:
-        done_event.wait()
-
-    # Signal the display process
-    # experiment.close()
-    display_done_event.set()
-
-    # Terminate all processes
-    # Terminate the model workers
-    for p in all_processes:
-        p.terminate()
-        while p.is_alive():
-            time.sleep(0.1)
-    # tensorboard_process.join()
+        experiment.asynchronously_run_model(200)
+        experiment.asynchronously_run_reinforcement_learning(200, train_actor=False)
+        experiment.asynchronously_run_reinforcement_learning(3000, train_actor=True)
