@@ -1,3 +1,4 @@
+import socket
 import multiprocessing
 import numpy as np
 from numpy import pi, log
@@ -8,6 +9,7 @@ import tensorflow.contrib.layers as tl
 import time
 import viewer
 import os
+from tensorboard import main as tb
 
 
 def actions_dict_from_array(actions):
@@ -32,19 +34,37 @@ def get_cluster(n_parameter_servers, n_workers):
     return tf.train.ClusterSpec(spec)
 
 
-def tensorboard_server_func(logdir):
-    os.system('tensorboard --logdir=' + logdir + '> /dev/null 2>&1')
+def tensorboard_server_func(logdir, port):
+    tf.flags.FLAGS.logdir = logdir
+    tf.flags.FLAGS.port = port
+    tb.main()
+    # os.system('tensorboard --logdir=' + logdir + ' --port=' + str(port) + '> /dev/null 2>&1')
 
 
-def chromium_func():
-    os.system('chromium-browser http://localhost:6006 > /dev/null 2>&1')
+def chromium_func(port):
+    while not is_port_in_use(port):
+        time.sleep(1)
+    os.system('chromium-browser http://localhost:{} > /dev/null 2>&1'.format(port))
+
+
+def is_port_in_use(port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) == 0
+
+
+def get_available_port():
+    port = 6006
+    while is_port_in_use(port):
+        port += 1
+    return port
 
 
 def tensorboard_func(logdir):
-    p1 = multiprocessing.Process(target=tensorboard_server_func, args=(logdir,))
+    port = get_available_port()
+    p1 = multiprocessing.Process(target=tensorboard_server_func, args=(logdir, port))
     p1.start()
-    time.sleep(5)
-    p2 = multiprocessing.Process(target=chromium_func)
+    time.sleep(20)
+    p2 = multiprocessing.Process(target=chromium_func, args=(port,))
     p2.start()
     p2.join()
     p1.terminate()
@@ -165,15 +185,29 @@ class Worker:
     def define_reinforcement_learning(self):
         net_dim = self.rl_shared_net_dim + self.actor_remaining_net_dim
         self.rl_inputs = tf.placeholder(shape=[None, net_dim[0]], dtype=tf.float32, name="actor_inputs")
-        self.actions = tf.placeholder(shape=[None, net_dim[-1]], dtype=tf.float32, name="actor_picked_actions")  # picked actions
-        self.actor_targets = tf.placeholder(shape=[None], dtype=tf.float32, name="actor_td_error")  # TD target value
-        targets = tf.expand_dims(self.actor_targets, -1)
+        self.return_targets_not_bootstraped = tf.placeholder(shape=[None], dtype=tf.float32, name="returns_target")
         batch_size = tf.shape(self.rl_inputs)[0]
+        constant_gammas = tf.fill(dims=[batch_size], value=self.discount_factor)
+        self.gammas = tf.cumprod(constant_gammas, reverse=True)
+
         prev_layer = self.rl_inputs
         with tf.variable_scope("shared"):
             for i, d in enumerate(self.rl_shared_net_dim[1:]):
                 prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i))
         fork_layer = prev_layer
+        with tf.variable_scope("private_to_critic"):
+            for i, d in enumerate(self.critic_remaining_net_dim):
+                activation_fn = tf.nn.relu if i < len(self.critic_remaining_net_dim) - 1 else None
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
+            self.critic_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
+        self.return_targets = self.return_targets_not_bootstraped + self.gammas * self.critic_value[-1]
+        self.critic_losses = (self.critic_value - self.return_targets) ** 2
+        self.critic_loss = tf.reduce_mean(self.critic_losses, name="loss")
+
+        self.actions = tf.placeholder(shape=[None, net_dim[-1]], dtype=tf.float32, name="actor_picked_actions")  # picked actions
+        self.actor_targets = self.return_targets - self.critic_value
+        targets = tf.expand_dims(self.actor_targets, -1)
+        prev_layer = fork_layer
         with tf.variable_scope("private_to_actor"):
             for i, d in enumerate(self.actor_remaining_net_dim[:-1]):
                 prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i))
@@ -189,15 +223,6 @@ class Worker:
         self.actor_losses = -self.log_probs * targets - self.entropy_coef * self.entropy
         self.actor_loss = tf.reduce_sum(self.actor_losses, name="loss")
 
-        self.critic_targets = tf.placeholder(shape=[None], dtype=tf.float32, name="critic_target_returns")  # TD target value
-        prev_layer = fork_layer
-        with tf.variable_scope("private_to_critic"):
-            for i, d in enumerate(self.critic_remaining_net_dim):
-                activation_fn = tf.nn.relu if i < len(self.critic_remaining_net_dim) - 1 else None
-                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
-            self.critic_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
-        self.critic_losses = (self.critic_value - self.critic_targets) ** 2
-        self.critic_loss = tf.reduce_mean(self.critic_losses, name="loss")
         # self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
         self.global_rl_step = tf.Variable(0, dtype=tf.int32)
         self.critic_optimizer = tf.train.AdamOptimizer(1e-3)
@@ -235,7 +260,6 @@ class Worker:
         while not self.done_event.is_set():
             self.run_n_display_steps(win)
         win.close()
-        self.server.join()
 
     def run_model(self, n_updates):
         global_model_step = self.sess.run(self.global_model_step)
@@ -349,7 +373,7 @@ class Worker:
             # display
             win(vision, current_positions, predicted_positions, next_positions, current_reward, predicted_return)
 
-    def rewards_to_return(self, rewards, prev_return):
+    def rewards_to_return(self, rewards, prev_return=0):
         returns = np.zeros_like(rewards)
         for i in range(len(rewards) - 1, -1, -1):
             r = rewards[i]
@@ -358,13 +382,7 @@ class Worker:
         return returns
 
     def update_reinforcement_learning(self, states, actions, rewards, train_actor=True):
-        feed_dict = self.to_rl_feed_dict(states=states)
-        predicted_returns = self.sess.run(self.critic_value, feed_dict=feed_dict)
-        feed_dict = self.to_rl_feed_dict(
-            states=states,
-            actions=actions,
-            rewards=rewards,
-            predicted_returns=predicted_returns)
+        feed_dict = self.to_rl_feed_dict(states=states, actions=actions, rewards=rewards)
         train_op = self.rl_train_op if train_actor else self.critic_train_op
         fetches = [self.actor_loss, self.critic_loss, self.global_rl_step, train_op, self.rl_summary]
         aloss, closs, global_rl_step, _, rl_summary = self.sess.run(fetches, feed_dict=feed_dict)
@@ -393,7 +411,7 @@ class JointAgentWorker(Worker):
     def get_rl_state(self):
         return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
 
-    def to_rl_feed_dict(self, states=None, actions=None, rewards=None, predicted_returns=None):
+    def to_rl_feed_dict(self, states=None, actions=None, rewards=None):
         # transforms the inputs into a feed dict for the actor
         feed_dict = {}
         if states is not None:
@@ -403,12 +421,11 @@ class JointAgentWorker(Worker):
         if actions is not None:
             np_actions = np.array(actions)
             feed_dict[self.actions] = np_actions
-        if rewards is not None and predicted_returns is not None:
+        if rewards is not None:
             # reverse pass through the rewards here...
-            returns = self.rewards_to_return(rewards, predicted_returns[-1])
+            returns = self.rewards_to_return(rewards)
             feed_dict[self.rl_reward] = rewards
-            feed_dict[self.critic_targets] = returns
-            feed_dict[self.actor_targets] = returns - predicted_returns
+            feed_dict[self.return_targets_not_bootstraped] = returns
         return feed_dict
 
     def to_model_feed_dict(self, states, targets=False):
@@ -436,6 +453,166 @@ class JointAgentWorker(Worker):
         self.critic_remaining_net_dim = [1]
 
 
+class Experiment:
+    def __init__(self, n_parameter_servers, n_workers, WorkerCls, experiment_dir, args_env, args_worker, display_dpi=3):
+        self.n_parameter_servers = n_parameter_servers
+        self.n_workers = n_workers
+        self.WorkerCls = WorkerCls
+        self.cluster = get_cluster(n_parameter_servers, n_workers)
+        self.parameter_servers_processes = []
+        self.workers_processes = []
+        self.workers_events = []
+        self.experiment_dir = experiment_dir
+        self.mktree()
+        self.args_env, self.args_worker = args_env, list(args_worker)
+        self.args_worker = [self.cluster, self.logdir] + self.args_worker
+        self.args_env_display = list(args_env)
+        self.args_env_display[5] = display_dpi
+        self._define_tensorboard_process()
+        self._define_display_process()
+
+        # Define processes:
+    def _define_tensorboard_process(self):
+        self.tensorboard_process = multiprocessing.Process(target=self.tensorboard_func)
+
+    def _define_display_process(self):
+        self.display_event = multiprocessing.Event()
+        self.display_process = multiprocessing.Process(target=self.worker_display_func, daemon=True)
+
+    def _define_parameter_server_processes(self):
+        for i in range(self.n_parameter_servers):
+            p = multiprocessing.Process(target=self.parameter_server_func, args=(i,), daemon=True)
+            self.parameter_servers_processes.append(p)
+
+    def _define_workers_model_processes(self, n_updates):
+        for i in range(self.n_workers):
+            p = multiprocessing.Process(target=self.worker_model_func, args=(i, n_updates), daemon=True)
+            self.workers_processes.append(p)
+            self.workers_events.append(multiprocessing.Event())
+
+    def _define_workers_rl_processes(self, n_updates, train_actor=True):
+        for i in range(self.n_workers):
+            p = multiprocessing.Process(target=self.worker_rl_func, args=(i, n_updates, train_actor), daemon=True)
+            self.workers_processes.append(p)
+            self.workers_events.append(multiprocessing.Event())
+
+    def worker_display_func(self):
+        env = environment.Environment(*self.args_env_display)
+        worker = self.WorkerCls(0, self.display_event, env, *self.args_worker)
+        worker.wait_for_variables_initialization()
+        worker.run_display()
+
+    def tensorboard_func(self):
+        port = get_available_port()
+        p1 = multiprocessing.Process(target=tensorboard_server_func, args=(self.logdir, port), daemon=True)
+        p1.start()
+        time.sleep(2)
+        p2 = multiprocessing.Process(target=chromium_func, args=(port,), daemon=True)
+        p2.start()
+        p2.join()
+        terminate_process_safe(p1)
+
+    def parameter_server_func(self, task_index):
+        server = tf.train.Server(self.cluster, "ps", task_index)
+        server.join()
+
+    def worker_model_func(self, task_index, n_updates):
+        env = environment.Environment(*self.args_env)
+        worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker)
+        worker.wait_for_variables_initialization()
+        worker.run_model(n_updates)
+
+    def worker_rl_func(self, task_index, n_updates, train_actor=True):
+        env = environment.Environment(*self.args_env)
+        worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker)
+        worker.wait_for_variables_initialization()
+        worker.run_reinforcement_learning(n_updates, train_actor)
+
+    def __enter__(self):
+        self.start_parameter_servers()
+        return self
+
+    def __exit__(self, type, value, traceback):
+        self.close()
+
+    def mktree(self):
+        self.logdir = self.experiment_dir + "/log"
+        self.checkpointsdir = self.experiment_dir + "/checkpoints"
+        os.mkdir(self.experiment_dir)
+        os.mkdir(self.logdir)
+        os.mkdir(self.checkpointsdir)
+
+    def start_tensorboard(self):
+        if not self.tensorboard_process.is_alive():
+            self.tensorboard_process.start()
+
+    def close_tensorboard(self):
+        if self.tensorboard_process.is_alive():
+            terminate_process_safe(self.tensorboard_process)
+
+    def start_parameter_servers(self):
+        self._define_parameter_server_processes()
+        for p in self.parameter_servers_processes:
+            if not p.is_alive():
+                p.start()
+
+    def close_parameter_servers(self):
+        for p in self.parameter_servers_processes:
+            if p.is_alive():
+                p.terminate()
+        for p in self.parameter_servers_processes:
+            while p.is_alive():
+                time.sleep(0.1)
+
+    def start_display_worker(self):
+        if not self.display_process.is_alive():
+            self.display_process.start()
+
+    def close_display_worker(self):
+        if self.display_process.is_alive():
+            self.display_event.set()
+            while self.display_process.is_alive():
+                time.sleep(0.1)
+
+    def asynchronously_run_model(self, n_updates):
+        self._define_workers_model_processes(n_updates)
+        self._start_workers_processes()
+
+    def asynchronously_run_reinforcement_learning(self, n_updates, train_actor=True):
+        self._define_workers_rl_processes(n_updates, train_actor=train_actor)
+        self._start_workers_processes()
+
+    def _start_workers_processes(self):
+        procs = self.workers_processes[1:] if self.display_process.is_alive() else self.workers_processes
+        events = self.workers_events[1:] if self.display_process.is_alive() else self.workers_events
+        blockrun(procs, events)
+        self.workers_events = []
+        self.workers_processes = []
+
+    def close(self):
+        # self.close_tensorboard()
+        self.close_display_worker()
+        self.close_parameter_servers()
+
+
+def blockrun(procs, events):
+    for p in procs:
+        p.start()
+    for e in events:
+        e.wait()
+    for p in procs:
+        p.terminate()
+    for p in procs:
+        while p.is_alive():
+            time.sleep(0.1)
+
+
+def terminate_process_safe(p):
+    p.terminate()
+    while p.is_alive():
+        time.sleep(0.1)
+
+
 if __name__ == "__main__":
     import environment
 
@@ -461,20 +638,32 @@ if __name__ == "__main__":
     n_discrete = 32
 
     discount_factor = 0.85
-    min_global_updates = 350
+    min_global_updates = 100
     env_step_length = 15
-    sequence_length = 1024  # 64
+    sequence_length = 64  # 1024  # 64
     logdir = TemporaryDirectory()
 
     N_WORKERS = 8
-    N_PARAMETER_SERVERS = 2
+    N_PARAMETER_SERVERS = 1
 
     cluster = get_cluster(N_PARAMETER_SERVERS, N_WORKERS)
     args_env = (json_model, skin_order, skin_resolution, xlim, ylim, dpi, dt, n_discrete)
-    args_worker = (cluster, logdir.name, discount_factor, env_step_length, sequence_length)
+    # args_worker = (cluster, logdir.name, discount_factor, env_step_length, sequence_length)
+    args_worker = (discount_factor, env_step_length, sequence_length)
 
+    with Experiment(
+            N_PARAMETER_SERVERS, N_WORKERS, JointAgentWorker,
+            "/tmp/exp_test", args_env, args_worker, display_dpi=3) as experiment:
+        experiment.start_tensorboard()
+        experiment.start_display_worker()
+        experiment.asynchronously_run_model(100)
+        experiment.asynchronously_run_reinforcement_learning(50, train_actor=False)
+        experiment.asynchronously_run_reinforcement_learning(50, train_actor=True)
+
+    print(1 / 0)
 
     # Start TensorBoard
+    # experiment.start_tensorboard()
     tensorboard_process = multiprocessing.Process(
         target=tensorboard_func,
         args=(logdir.name, )
@@ -482,6 +671,7 @@ if __name__ == "__main__":
     tensorboard_process.start()
 
     # Define parameter servers processes
+    # experiment.start_parameter_servers_and_display_worker(display=True)
     parameter_servers_processes = []
     for i in range(N_PARAMETER_SERVERS):
         parameter_servers_processes.append(multiprocessing.Process(
@@ -491,6 +681,7 @@ if __name__ == "__main__":
         ))
 
     # Define workers processes
+    # experiment.asynchronously_run_model()
     workers_processes = []
     workers_events = []
     for i in range(N_WORKERS - 1):
@@ -529,6 +720,7 @@ if __name__ == "__main__":
             time.sleep(0.1)
 
     # Define workers processes
+    # experiment.asynchronously_run_reinforcement_learning(train_actor=False)
     dpi = 1
     args_env = (json_model, skin_order, skin_resolution, xlim, ylim, dpi, dt, n_discrete)
     train_actor = False
@@ -557,6 +749,7 @@ if __name__ == "__main__":
         while p.is_alive():
             time.sleep(0.1)
 
+    # experiment.asynchronously_run_reinforcement_learning(train_actor=True)
     train_actor = True
     workers_processes = []
     workers_events = []
@@ -569,6 +762,7 @@ if __name__ == "__main__":
             daemon=True
         ))
 
+    all_processes = parameter_servers_processes + workers_processes + [display_process]
     # Start the reinforcement learning workers
     for p in workers_processes:
         p.start()
@@ -578,6 +772,7 @@ if __name__ == "__main__":
         done_event.wait()
 
     # Signal the display process
+    # experiment.close()
     display_done_event.set()
 
     # Terminate all processes
