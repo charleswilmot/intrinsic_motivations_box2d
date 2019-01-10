@@ -106,7 +106,8 @@ class A3CDiscreteActorMLP(GraphLeaf):
         # Warning + or - entropy ??? Check sign here
         self.losses = - (tf.log(self.picked_action_probs) * self.targets + entropy_coef * self.entropy)
         self.loss = tf.reduce_sum(self.losses, name="loss")
-        self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
+        # self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
+        self.optimizer = tf.train.AdamOptimizer(1e-5)
 
 
 class A3CContinuousActorMLP(GraphLeaf):
@@ -132,7 +133,8 @@ class A3CContinuousActorMLP(GraphLeaf):
         self.entropy_mean = tf.reduce_mean(self.entropy, name="entropy_mean")
         self.losses = -self.log_probs * targets - entropy_coef * self.entropy
         self.loss = tf.reduce_sum(self.losses, name="loss")
-        self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
+        # self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
+        self.optimizer = tf.train.AdamOptimizer(1e-5)
 
 
 class A3CCriticMLP(GraphLeaf):
@@ -146,10 +148,10 @@ class A3CCriticMLP(GraphLeaf):
         with tf.variable_scope("private_to_critic"):
             self.logits = tl.fully_connected(prev_layer, net_dim[-1], activation_fn=None, scope="output", **self.tlkwargs)
             self.logits = tf.squeeze(self.logits, axis=1, name="logits")
-        self.losses = tf.squared_difference(self.logits, self.targets)
-        self.loss = tf.reduce_sum(self.losses, name="loss")
+        self.losses = (self.logits - self.targets) ** 2
+        self.loss = tf.reduce_mean(self.losses, name="loss")
         # self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
-        self.optimizer = tf.train.AdamOptimizer()
+        self.optimizer = tf.train.AdamOptimizer(1e-5)
 
 
 class A3CMLP(GraphNode):
@@ -161,20 +163,21 @@ class A3CMLP(GraphNode):
         self.subgraphs["critic"] = A3CCriticMLP("critic", critic_net_dim)
         self.loss = self.subgraphs["actor"].loss + self.subgraphs["critic"].loss
         # self.optimizer = tf.train.RMSPropOptimizer(0, 0.1, 0.0, 1e-6)
-        self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
+        # self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
+        self.optimizer = tf.train.AdamOptimizer(1e-5)
 
 
+## Useless ???
 ## Assumes ten has rank 2
-def _discretize(ten, mini, maxi, n):
-    # m = tf.shape(ten)[1]
-    m = ten.get_shape().as_list()[1]
-    x = tf.linspace(0.0, 1.0, n)
-    x = tf.reshape(x, (1, 1, -1))
-    arg = (tf.expand_dims(ten, -1) - mini) / (maxi - mini)
-    x = tf.tile(x, tf.shape(arg))
-    x = x - arg
-    x = tf.reshape(x, (-1, n * m))
-    return tf.pow(tf.cos(x * pi), 20)
+# def _discretize(ten, mini, maxi, n):
+#     m = ten.get_shape().as_list()[1]
+#     x = tf.linspace(0.0, 1.0, n)
+#     x = tf.reshape(x, (1, 1, -1))
+#     arg = (tf.expand_dims(ten, -1) - mini) / (maxi - mini)
+#     x = tf.tile(x, tf.shape(arg))
+#     x = x - arg
+#     x = tf.reshape(x, (-1, n * m))
+#     return tf.pow(tf.cos(x * pi), 20)
 
 
 class JointForwardModel(GraphLeaf):
@@ -186,10 +189,10 @@ class JointForwardModel(GraphLeaf):
             for i, d in enumerate(net_dim[1:]):
                 prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), **self.tlkwargs)
         self.outputs = prev_layer
-        # self.losses = tf.squared_difference(self.outputs, self.targets)
         self.losses = (self.outputs - self.targets) ** 2
         self.loss = tf.reduce_mean(self.losses, name="loss")
-        self.optimizer = tf.train.RMSPropOptimizer(0.0025, 0.99, 0.0, 1e-6)
+        # self.optimizer = tf.train.RMSPropOptimizer(0.0025, 0.99, 0.0, 1e-6)
+        self.optimizer = tf.train.AdamOptimizer(1e-5)
 
 
 class JointAgent(GraphNode):
@@ -198,7 +201,8 @@ class JointAgent(GraphNode):
         self.subgraphs["reinforcement_learning"] = A3CMLP("reinforcement_learning", rl_net_dim, entropy_coef)
         self.subgraphs["model"] = JointForwardModel("joint_model", model_net_dim)
         self.loss = self.subgraphs["reinforcement_learning"].loss + self.subgraphs["model"].loss
-        self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
+        # self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
+        self.optimizer = tf.train.AdamOptimizer(1e-5)
 
 
 def actions_dict_from_array(actions):
@@ -266,6 +270,21 @@ class Worker:
             except tf.errors.CancelledError:
                 return
 
+    def run_display(self, sess, coord, win):
+        buffers = None
+        with sess.as_default(), sess.graph.as_default():
+            try:
+                while not coord.should_stop():
+                    # Copy Parameters from the global networks
+                    # TODO repalce by download_all_vars
+                    sess.run(self.download_rl_vars)
+                    sess.run(self.download_model_vars)
+                    print("{} successfully downloaded the parameters".format(self.name))
+                    # Collect some experience
+                    self.run_n_display_steps(sess, win)
+            except tf.errors.CancelledError:
+                return
+
     def run_model(self, sess, coord):
         with sess.as_default(), sess.graph.as_default():
             try:
@@ -312,7 +331,7 @@ class Worker:
             # set action
             t2 = time.time()
             action_dict = actions_dict_from_array(action)
-            env.set_positions(action_dict)
+            self.env.set_positions(action_dict)
             # run environment step
             self.environment_step()
             # get next state
@@ -328,7 +347,7 @@ class Worker:
             t_env += 1000 * (t3 - t2)
             t_reward += 1000 * (t4 - t3)
         # print(self.name + " profiling run_n_model_steps: get_state {:.1f}ms  actor {:.1f}ms  reward {:.1f}ms  env {:.1f}ms".format(t_state, t_actor, t_reward, t_env))
-        return states, actions, rewards, visions
+        return states, actions, rewards
 
     def run_n_model_steps(self, sess):
         states = []
@@ -345,7 +364,7 @@ class Worker:
             # run action in env
             t2 = time.time()
             action_dict = actions_dict_from_array(action)
-            env.set_positions(action_dict)
+            self.env.set_positions(action_dict)
             self.environment_step()
             t3 = time.time()
             t_state += 1000 * (t1 - t0)
@@ -353,6 +372,38 @@ class Worker:
             t_env += 1000 * (t3 - t2)
         # print(self.name + " profiling run_n_model_steps: get_state {:.1f}ms  actor {:.1f}ms  env {:.1f}ms".format(t_state, t_actor, t_env))
         return states
+
+    def run_n_display_steps(self, sess, win):
+        rl_graph = self.local_graph.reinforcement_learning
+        action_return_fetches = [rl_graph.actor.sample, rl_graph.critic.logits]
+        predicted_positions_reward_fetches = [self.local_graph.model.outputs, self.local_graph.model.loss]
+        for _ in range(self.sequence_length):
+            # get current vision
+            vision = env.vision
+            # get current positions
+            current_positions = env.discrete_positions
+            # get action and predicted return
+            rl_states = [self.get_rl_state()]
+            model_states = [self.get_model_state()]
+            rl_feed_dict = self.to_rl_feed_dict(states=rl_states)
+            actions, predicted_returns = sess.run(action_return_fetches, feed_dict=rl_feed_dict)
+            action = actions[0]
+            predicted_return = predicted_returns[0]
+            # run action in env
+            action_dict = actions_dict_from_array(action)
+            self.env.set_positions(action_dict)
+            self.environment_step()
+            # get current positions
+            next_positions = env.discrete_positions
+            # get predicted positions and reward
+            model_states.append(self.get_model_state())
+            model_feed_dict = self.to_model_feed_dict(states=model_states, targets=True)
+            predicted_positions, neg_reward = sess.run(predicted_positions_reward_fetches, feed_dict=model_feed_dict)
+            predicted_positions = predicted_positions[0].reshape((4, -1))
+            current_reward = -neg_reward
+            # display
+            win(vision, current_positions, predicted_positions, next_positions, current_reward, predicted_return)
+            # win respnsible of the computation of the true return
 
     def rewards_to_return(self, rewards, prev_return):
         returns = np.zeros_like(rewards)
@@ -362,7 +413,7 @@ class Worker:
             returns[i] = prev_return
         return returns
 
-    def update_reinforcement_learning(self, sess, coord, states, actions, rewards, visions):
+    def update_reinforcement_learning(self, sess, coord, states, actions, rewards):
         rl_graph = self.local_graph.reinforcement_learning
         feed_dict = self.to_rl_feed_dict(states=states)
         predicted_returns = sess.run(rl_graph.critic.logits, feed_dict=feed_dict)
@@ -370,8 +421,6 @@ class Worker:
         feed_dict = self.to_rl_feed_dict(states=states, actions=actions, returns=returns, predicted_returns=predicted_returns)
         fetches = [rl_graph.actor.loss, rl_graph.critic.loss, rl_graph.inc_update_count, self.upload_train_rl_vars, rl_graph.actor.log_probs]
         aloss, closs, n_model_global_updates, _, log_prob = sess.run(fetches, feed_dict=feed_dict)
-        # Display environment
-        self.display_queue.put(self.to_window(states, actions, rewards, visions, returns, predicted_returns))
         print("{} finished update number {} (actor loss = {:.3f}     critic loss = {:.3f})".format(self.name, n_model_global_updates, aloss, closs))
         if n_model_global_updates >= self.min_global_updates:
             coord.request_stop()
@@ -434,8 +483,8 @@ class JointAgentWorker(Worker):
 if __name__ == "__main__":
     import environment
 
-    model_net_dim = [12 * 32, 200, 200, 4 * 32]
-    rl_net_dim = [12 * 32, 200, 200, 4]
+    model_net_dim = [12 * 32, 200, 200, 200, 4 * 32]
+    rl_net_dim = [12 * 32, 200, 200, 200, 4]
     entropy_coef = 0.01
     with tf.variable_scope("global"):
         ja = JointAgent("joint_agent", model_net_dim, rl_net_dim, entropy_coef)
@@ -457,16 +506,23 @@ if __name__ == "__main__":
     xlim = [-20.5, 20.5]
     ylim = [-13.5, 13.5]
 
+    discount_factor = 0.2
+    min_global_updates = 1000
+    env_step_length = 50
+    sequence_length = 64
+    display_sequence_length = 3
+
     with tf.device('/cpu:0'):
         workers = []
         windows = []
-        for i in range(4):
+        for i in range(8):
             env = environment.Environment("../models/two_arms.json", skin_order, skin_resolution, xlim, ylim, dpi=1, dt=1 / 150.0)
-            workers.append(JointAgentWorker("worker_{}".format(i), env, ja, 0.2, 300, 500, 64))
-            win = viewer.JointAgentWindow()
-            win.set_return_lim((-0.2, 0))
-            windows.append(win)
-        queues = [w.display_queue for w in workers]
+            workers.append(JointAgentWorker("worker_{}".format(i), env, ja, discount_factor, min_global_updates, env_step_length, sequence_length))
+
+    env = environment.Environment("../models/two_arms.json", skin_order, skin_resolution, xlim, ylim, dpi=1, dt=1 / 150.0)
+    display_worker = JointAgentWorker("worker_display", env, ja, discount_factor, min_global_updates, env_step_length, display_sequence_length)
+    win = viewer.JointAgentWindow(discount_factor)
+
 
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
@@ -478,8 +534,10 @@ if __name__ == "__main__":
             def target_run_model():
                 return worker.run_model(sess, coord)
             t = threading.Thread(target=target_run_model)
+            time.sleep(np.random.uniform(1, 2))
             t.start()
             worker_threads.append(t)
+        display_worker.run_display(sess, coord, win)
         coord.join(worker_threads)
         coord.clear_stop()
 
@@ -489,16 +547,9 @@ if __name__ == "__main__":
             def target_run_rl():
                 return worker.run_reinforcement_learning(sess, coord)
             t = threading.Thread(target=target_run_rl)
+            time.sleep(np.random.uniform(1, 2))
             t.start()
             worker_threads.append(t)
-        all_queue_empty = False
-        while not (coord.should_stop() and all_queue_empty):
-            all_queue_empty = True
-            for i in range(len(workers)):
-                q = queues[i]
-                if not q.empty():
-                    all_queue_empty = False
-                    while not q.empty():
-                        data = q.get(block=False)
-                    windows[i](*data)
+        display_worker.run_display(sess, coord, win)
+
         coord.join(worker_threads)

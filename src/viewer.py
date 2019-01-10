@@ -135,6 +135,57 @@ class JointsIAX:
             self.__initaxes__(positions, speeds)
 
 
+class OnlineReturnIAX:
+    def __init__(self, ax, discount_factor, return_lookback=100, lim=[[-2, 0.5]]):
+        self.ax = ax
+        self._discount_factor = discount_factor
+        self._return_lookback = return_lookback
+        self._estimated_true_return = np.zeros(self._return_lookback)
+        self._predicted_return = np.zeros(self._return_lookback)
+        self._rewards = np.zeros(self._return_lookback)
+        self._lim = lim
+        self._axes_initialized = False
+
+    def __initaxes__(self):
+        X = np.arange(1 - self._return_lookback, 1)
+        self._predicted_line = self.ax.plot(X, self._predicted_return, "--")[0]
+        self._estimated_true_line = self.ax.plot(X, self._estimated_true_return, "--")[0]
+        self.ax.axvline(0, color="r")
+        self.ax.set_ylim(*self._lim)
+        self.ax.set_title("Return")
+        self._axes_initialized = True
+
+    def set_lim(self, *lim):
+        self._lim = lim
+        if self._axes_initialized:
+            self.ax.set_ylim(*lim)
+
+    def set_range(self, *rnge):
+        self._range = rnge
+        if self._axes_initialized:
+            for line in self._lines:
+                line.set_xdata(np.arange(*rnge))
+
+    def _update_buffer(self, current_reward, predicted_return):
+        self._predicted_return[:-1] = self._predicted_return[1:]
+        self._predicted_return[-1] = predicted_return
+        self._rewards[:-1] = self._rewards[1:]
+        self._rewards[-1] = current_reward
+        prev = predicted_return
+        self._estimated_true_return[-1] = prev
+        for i in np.arange(self._return_lookback - 2, -1, -1):
+            self._estimated_true_return[i] = prev * self._discount_factor + self._rewards[i]
+            prev = self._estimated_true_return[i]
+
+    def __call__(self, current_reward, predicted_return):
+        self._update_buffer(current_reward, predicted_return)
+        if self._axes_initialized:
+            self._estimated_true_line.set_ydata(self._estimated_true_return)
+            self._predicted_line.set_ydata(self._predicted_return)
+        else:
+            self.__initaxes__()
+
+
 class ReturnIAX:
     def __init__(self, ax, rturn):
         self.ax = ax
@@ -207,6 +258,7 @@ class DiscreteJointPositionIAX:
         self._prev_line, = self.ax.plot(prev, "--", alpha=0.6)
         self.ax.set_ylim(*self._lim)
         self.ax.axes.get_xaxis().set_ticks([])
+        self.ax.axes.get_yaxis().set_ticks([])
         self.ax.set_title(self._title)
         self._axes_initialized = True
 
@@ -420,11 +472,10 @@ class DatabaseDisplay:
 
 
 class JointAgentWindow:
-    def __init__(self):
+    def __init__(self, discount_factor, return_lookback=100):
         self.fig = plt.figure()
-        fake_initial_return_for_axes_creation = np.zeros((200, 2))
         self.iax_vision = VisionIAX(self.fig.add_subplot(321))
-        self.iax_return = ReturnIAX(self.fig.add_subplot(322), fake_initial_return_for_axes_creation)
+        self.iax_return = OnlineReturnIAX(self.fig.add_subplot(322), discount_factor, return_lookback)
         conf = [
             (325, "Arm1_to_Arm2_Left"),
             (326, "Arm1_to_Arm2_Right"),
@@ -449,11 +500,10 @@ class JointAgentWindow:
         for iax in self.iax_joints:
             iax.set_lim(*lim)
 
-    def update(self, index):
-        self.iax_vision(self.visions[index])
-        if not self.rturn_idle:
-            self.iax_return(index)
-        for position, target, prev, iax in zip(self.positions[index], self.targets[index], self.prevs[index], self.iax_joints):
+    def __call__(self, vision, current_positions, predicted_positions, next_positions, current_reward, predicted_return):
+        self.iax_vision(vision)
+        self.iax_return(current_reward, predicted_return)
+        for position, target, prev, iax in zip(predicted_positions, next_positions, current_positions, self.iax_joints):
             iax(position, target, prev)
         if self._fig_shawn:
             self.fig.canvas.draw()
@@ -461,23 +511,6 @@ class JointAgentWindow:
         else:
             self.fig.show()
             self._fig_shawn = True
-
-    def __call__(self, visions, positions, targets, prevs, rturn=None, predicted_rturn=None):
-        self.visions = visions
-        self.positions = positions
-        self.targets = targets
-        self.prevs = prevs
-        self.rturn_idle = True
-        if rturn is not None and predicted_rturn is not None:
-            self.rturn = np.stack((rturn, predicted_rturn), axis=1)
-            self.iax_return.set_return(self.rturn)
-            self.rturn_idle = False
-        if not len(visions) == len(positions) == len(targets) == len(prevs) == len(self.rturn):
-            lengths = [("visions", len(visions)), ("positions", len(positions)), ("targets", len(targets)), ("prevs", len(prevs)), ("return", len(self.rturn))]
-            print(lengths)
-            raise ValueError("Length are not equal")
-        for i in range(len(self.visions)):
-            self.update(i)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 def discretize(arr, mini, maxi, n):
     discrete = np.tile(np.linspace(mini, maxi, n), list(arr.shape) + [1])
     discrete -= np.expand_dims(arr, -1)
-    discrete = np.cos(np.pi * discrete / (maxi - mini)) ** 20
+    discrete = np.cos(np.pi * discrete / (maxi - mini) - np.pi * (maxi + mini) / (maxi - mini) + np.pi / 2) ** 20
     return discrete
 
 
