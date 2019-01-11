@@ -204,11 +204,16 @@ class Worker:
 
     def save(self, path):
         if self.task_index == 0:
+            print("{} saving model to {}".format(self.name, path))
             self.saver.save(self.sess, path)
+        self.done_event.set()
+        self.server.join()
 
     def restore(self, path):
         if self.task_index == 0:
             self.saver.restore(self.sess, path)
+        self.done_event.set()
+        self.server.join()
 
     def environment_step(self):
         for _ in range(self.env_step_length):
@@ -482,7 +487,7 @@ class Experiment:
 
     def worker_display_func(self):
         env = environment.Environment(*self.args_env_display)
-        worker = self.WorkerCls(0, self.display_event, env, *self.args_worker)
+        worker = self.WorkerCls(self.n_workers - 1, self.display_event, env, *self.args_worker)
         worker.wait_for_variables_initialization()
         worker.run_display()
 
@@ -518,7 +523,7 @@ class Experiment:
         worker.wait_for_variables_initialization()
         worker.save(path)
 
-    def worker_save_func(self, task_index, path):
+    def worker_restore_func(self, task_index, path):
         env = environment.Environment(*self.args_env)
         worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker)
         worker.wait_for_variables_initialization()
@@ -579,16 +584,19 @@ class Experiment:
         self._start_workers_processes()
 
     def save_model(self, name):
-        self._define_workers_save_processes(self.checkpointsdir + '/{}'.format(name))
+        # path = os.path.abspath(self.checkpointsdir + "/{}/".format(name))
+        path = self.checkpointsdir + "/{}/".format(name)
+        os.mkdir(path)
+        self._define_workers_save_processes(path)
         self._start_workers_processes()
 
-    def restore_model(self, name):
-        self._define_workers_restore_processes(self.checkpointsdir + '/{}'.format(name))
+    def restore_model(self, path):
+        self._define_workers_restore_processes(path)
         self._start_workers_processes()
 
     def _start_workers_processes(self):
-        procs = self.workers_processes[1:] if self.display_process.is_alive() else self.workers_processes
-        events = self.workers_events[1:] if self.display_process.is_alive() else self.workers_events
+        procs = self.workers_processes[:-1] if self.display_process.is_alive() else self.workers_processes
+        events = self.workers_events[:-1] if self.display_process.is_alive() else self.workers_events
         blockrun(procs, events)
         self.workers_events = []
         self.workers_processes = []
@@ -647,7 +655,7 @@ if __name__ == "__main__":
     logdir = TemporaryDirectory()
 
     N_WORKERS = 8
-    N_PARAMETER_SERVERS = 2
+    N_PARAMETER_SERVERS = 1
 
     cluster = get_cluster(N_PARAMETER_SERVERS, N_WORKERS)
     args_env = (json_model, skin_order, skin_resolution, xlim, ylim, dpi, dt, n_discrete)
@@ -656,9 +664,12 @@ if __name__ == "__main__":
 
     with Experiment(
             N_PARAMETER_SERVERS, N_WORKERS, JointAgentWorker,
-            "/tmp/exp_test", args_env, args_worker, display_dpi=3) as experiment:
+            "../experiments/test_model_saving", args_env, args_worker, display_dpi=3) as experiment:
+        # experiment.start_display_worker()
         experiment.start_tensorboard()
-        experiment.start_display_worker()
-        experiment.asynchronously_run_model(200)
-        experiment.asynchronously_run_reinforcement_learning(200, train_actor=False)
-        experiment.asynchronously_run_reinforcement_learning(3000, train_actor=True)
+        experiment.asynchronously_run_model(300)
+        experiment.save_model("model_only")
+        experiment.asynchronously_run_reinforcement_learning(300, train_actor=False)
+        experiment.save_model("model_and_critic")
+        experiment.asynchronously_run_reinforcement_learning(600, train_actor=True)
+        experiment.save_model("model_critic_and_actor")
