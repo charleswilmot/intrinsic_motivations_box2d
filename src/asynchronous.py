@@ -1,3 +1,4 @@
+import environment
 import socket
 import multiprocessing
 import numpy as np
@@ -61,7 +62,7 @@ def get_available_port():
 
 class Worker:
     def __init__(self, task_index, done_event, env, cluster, logdir, discount_factor,
-                 env_step_length, sequence_length):
+                 env_step_length, sequence_length, summary_prefix=""):
         self.task_index = task_index
         self.cluster = cluster
         self._n_workers = self.cluster.num_tasks("worker") - 1
@@ -74,6 +75,7 @@ class Worker:
         self.entropy_coef = 0.01
         self.env_step_length = env_step_length
         self.sequence_length = sequence_length
+        self.summary_prefix = summary_prefix
         self.done_event = done_event
         self.define_networks()
         self.logdir = logdir
@@ -140,8 +142,8 @@ class Worker:
         self.global_model_step = tf.Variable(0, dtype=tf.int32)
         self.model_optimizer = tf.train.AdamOptimizer(1e-3)
         self.model_train_op = self.model_optimizer.minimize(self.model_loss, global_step=self.global_model_step)
-        self.model_loss_summary = tf.summary.scalar("model/loss", self.model_loss)
-        self.model_reward_summary = tf.summary.scalar("model/reward", self.reward)
+        self.model_loss_summary = tf.summary.scalar(self.summary_prefix + "/model_loss", self.model_loss)
+        self.model_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_model_time", self.reward)
         self.model_summary = tf.summary.merge([self.model_loss_summary, self.model_reward_summary])
 
     def define_reinforcement_learning(self):
@@ -187,14 +189,14 @@ class Worker:
 
         # self.optimizer = tf.train.RMSPropOptimizer(0.00025, 0.99, 0.0, 1e-6)
         self.global_rl_step = tf.Variable(0, dtype=tf.int32)
-        self.critic_optimizer = tf.train.AdamOptimizer(1e-3)
+        self.critic_optimizer = tf.train.AdamOptimizer(5e-5)
         self.critic_train_op = self.critic_optimizer.minimize(self.critic_loss, global_step=self.global_rl_step)
-        self.rl_optimizer = tf.train.AdamOptimizer(1e-3)
+        self.rl_optimizer = tf.train.AdamOptimizer(5e-5)
         self.rl_train_op = self.rl_optimizer.minimize(0.00001 * self.actor_loss + self.critic_loss, global_step=self.global_rl_step)
-        self.actor_loss_summary = tf.summary.scalar("actor/loss", self.actor_loss)
-        self.critic_loss_summary = tf.summary.scalar("critic/loss", self.critic_loss)
+        self.actor_loss_summary = tf.summary.scalar(self.summary_prefix + "/actor_loss", self.actor_loss)
+        self.critic_loss_summary = tf.summary.scalar(self.summary_prefix + "/critic_loss", self.critic_loss)
         self.rl_reward = tf.placeholder(shape=[None], dtype=tf.float32)
-        self.rl_reward_summary = tf.summary.scalar("critic/reward", tf.reduce_mean(self.rl_reward))
+        self.rl_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_rl_time", tf.reduce_mean(self.rl_reward))
         self.rl_summary = tf.summary.merge([self.actor_loss_summary, self.critic_loss_summary, self.rl_reward_summary])
 
     def wait_for_variables_initialization(self):
@@ -204,14 +206,14 @@ class Worker:
 
     def save(self, path):
         if self.task_index == 0:
-            print("{} saving model to {}".format(self.name, path))
-            self.saver.save(self.sess, path)
+            save_path = self.saver.save(self.sess, path + "/network.ckpt")
+            print("{} saved model to {}".format(self.name, save_path))
         self.done_event.set()
         self.server.join()
 
     def restore(self, path):
         if self.task_index == 0:
-            self.saver.restore(self.sess, path)
+            self.saver.restore(self.sess, os.path.normpath(path + "/network.ckpt"))
         self.done_event.set()
         self.server.join()
 
@@ -364,7 +366,7 @@ class Worker:
         fetches = [self.actor_loss, self.critic_loss, self.global_rl_step, train_op, self.rl_summary]
         aloss, closs, global_rl_step, _, rl_summary = self.sess.run(fetches, feed_dict=feed_dict)
         self.summary_writer.add_summary(rl_summary, global_step=global_rl_step)
-        if global_rl_step < 300 and global_rl_step % 2 == 0:
+        if global_rl_step % 100 <= self._n_workers:
             self.summary_writer.flush()
         print("{} finished update number {} (actor loss = {:.3f}     critic loss = {:.3f})".format(
               self.name, global_rl_step, aloss, closs))
@@ -375,7 +377,7 @@ class Worker:
         fetches = [self.model_loss, self.global_model_step, self.model_train_op, self.model_summary]
         loss, global_model_step, _, model_summary = self.sess.run(fetches, feed_dict=feed_dict)
         self.summary_writer.add_summary(model_summary, global_step=global_model_step)
-        if global_model_step < 300 and global_model_step % 2 == 0:
+        if global_model_step % 100 <= self._n_workers:
             self.summary_writer.flush()
         print("{} finished update number {} (loss = {:.3f})".format(self.name, global_model_step, loss))
         return global_model_step
@@ -418,7 +420,7 @@ class JointAgentWorker(Worker):
         return feed_dict
 
     def define_reward_scale(self):
-        self.model_loss_converges_to = 0.010
+        self.model_loss_converges_to = -0.0413
 
     def define_net_dims(self):
         dummy_state = np.array(self.get_model_state())
@@ -461,15 +463,15 @@ class Experiment:
             p = multiprocessing.Process(target=self.parameter_server_func, args=(i,), daemon=True)
             self.parameter_servers_processes.append(p)
 
-    def _define_workers_model_processes(self, n_updates):
+    def _define_workers_model_processes(self, n_updates, summary_prefix):
         for i in range(self.n_workers):
-            p = multiprocessing.Process(target=self.worker_model_func, args=(i, n_updates), daemon=True)
+            p = multiprocessing.Process(target=self.worker_model_func, args=(i, n_updates, summary_prefix), daemon=True)
             self.workers_processes.append(p)
             self.workers_events.append(multiprocessing.Event())
 
-    def _define_workers_rl_processes(self, n_updates, train_actor=True):
+    def _define_workers_rl_processes(self, n_updates, summary_prefix, train_actor=True):
         for i in range(self.n_workers):
-            p = multiprocessing.Process(target=self.worker_rl_func, args=(i, n_updates, train_actor), daemon=True)
+            p = multiprocessing.Process(target=self.worker_rl_func, args=(i, n_updates, summary_prefix, train_actor), daemon=True)
             self.workers_processes.append(p)
             self.workers_events.append(multiprocessing.Event())
 
@@ -505,15 +507,15 @@ class Experiment:
         server = tf.train.Server(self.cluster, "ps", task_index)
         server.join()
 
-    def worker_model_func(self, task_index, n_updates):
+    def worker_model_func(self, task_index, n_updates, summary_prefix):
         env = environment.Environment(*self.args_env)
-        worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker)
+        worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker, summary_prefix=summary_prefix)
         worker.wait_for_variables_initialization()
         worker.run_model(n_updates)
 
-    def worker_rl_func(self, task_index, n_updates, train_actor=True):
+    def worker_rl_func(self, task_index, n_updates, summary_prefix, train_actor=True):
         env = environment.Environment(*self.args_env)
-        worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker)
+        worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker, summary_prefix=summary_prefix)
         worker.wait_for_variables_initialization()
         worker.run_reinforcement_learning(n_updates, train_actor)
 
@@ -575,12 +577,12 @@ class Experiment:
             while self.display_process.is_alive():
                 time.sleep(0.1)
 
-    def asynchronously_run_model(self, n_updates):
-        self._define_workers_model_processes(n_updates)
+    def asynchronously_run_model(self, n_updates, summary_prefix):
+        self._define_workers_model_processes(n_updates, summary_prefix)
         self._start_workers_processes()
 
-    def asynchronously_run_reinforcement_learning(self, n_updates, train_actor=True):
-        self._define_workers_rl_processes(n_updates, train_actor=train_actor)
+    def asynchronously_run_reinforcement_learning(self, n_updates, summary_prefix, train_actor=True):
+        self._define_workers_rl_processes(n_updates, summary_prefix, train_actor=train_actor)
         self._start_workers_processes()
 
     def save_model(self, name):
@@ -626,10 +628,6 @@ def terminate_process_safe(p):
 
 
 if __name__ == "__main__":
-    import environment
-
-    # entropy_coef = 0.01
-
     skin_order = [
         ("Arm1_Left", 0),
         ("Arm2_Left", 0),
@@ -649,13 +647,13 @@ if __name__ == "__main__":
     dt = 1 / 150
     n_discrete = 32
 
-    discount_factor = 0.85
-    env_step_length = 15
-    sequence_length = 1024  # 64
+    discount_factor = 0.0
+    env_step_length = 45
+    sequence_length = 128  # 1024  # 64
     logdir = TemporaryDirectory()
 
-    N_WORKERS = 8
-    N_PARAMETER_SERVERS = 1
+    N_WORKERS = 16
+    N_PARAMETER_SERVERS = 8
 
     cluster = get_cluster(N_PARAMETER_SERVERS, N_WORKERS)
     args_env = (json_model, skin_order, skin_resolution, xlim, ylim, dpi, dt, n_discrete)
@@ -664,12 +662,14 @@ if __name__ == "__main__":
 
     with Experiment(
             N_PARAMETER_SERVERS, N_WORKERS, JointAgentWorker,
-            "../experiments/test_model_saving", args_env, args_worker, display_dpi=3) as experiment:
+            "../experiments/sequence_128_env_step_45_df_000_max_pred", args_env, args_worker, display_dpi=3) as experiment:
         # experiment.start_display_worker()
-        experiment.start_tensorboard()
-        experiment.asynchronously_run_model(300)
-        experiment.save_model("model_only")
-        experiment.asynchronously_run_reinforcement_learning(300, train_actor=False)
-        experiment.save_model("model_and_critic")
-        experiment.asynchronously_run_reinforcement_learning(600, train_actor=True)
-        experiment.save_model("model_critic_and_actor")
+        # experiment.start_tensorboard()
+        experiment.save_model("initial")
+        for i in range(4):
+            summary_prefix = "stage_{}".format(i)
+            experiment.asynchronously_run_model(4000 if i == 0 else 1000, summary_prefix)
+            experiment.save_model("after_model_{}".format(i))
+            experiment.asynchronously_run_reinforcement_learning(500, summary_prefix, train_actor=False)
+            experiment.asynchronously_run_reinforcement_learning(2500, summary_prefix, train_actor=True)
+            experiment.save_model("after_rl_{}".format(i))
