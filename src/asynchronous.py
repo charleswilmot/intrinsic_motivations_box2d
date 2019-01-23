@@ -1,6 +1,7 @@
 import environment
 import socket
 import multiprocessing
+import subprocess
 import numpy as np
 from numpy import pi, log
 from numpy.random import normal
@@ -36,10 +37,11 @@ def get_cluster(n_parameter_servers, n_workers):
 
 
 def tensorboard_server_func(logdir, port):
-    tf.flags.FLAGS.logdir = logdir
-    tf.flags.FLAGS.port = port
-    tb.main()
+    # tf.flags.FLAGS.logdir = logdir
+    # tf.flags.FLAGS.port = port
+    # tb.main()
     # os.system('tensorboard --logdir=' + logdir + ' --port=' + str(port) + '> /dev/null 2>&1')
+    subprocess.Popen(["tensorboard", "--logdir", logdir, "--port", str(port)])
 
 
 def chromium_func(port):
@@ -61,8 +63,8 @@ def get_available_port():
 
 
 class Worker:
-    def __init__(self, task_index, done_event, env, cluster, logdir, discount_factor,
-                 env_step_length, sequence_length, summary_prefix=""):
+    def __init__(self, task_index, done_event, env, cluster, logdir, discount_factor, sequence_length, reward_params,
+                 summary_prefix=""):
         self.task_index = task_index
         self.cluster = cluster
         self._n_workers = self.cluster.num_tasks("worker") - 1
@@ -73,8 +75,8 @@ class Worker:
         self.env = env
         self.discount_factor = discount_factor
         self.entropy_coef = 0.01
-        self.env_step_length = env_step_length
         self.sequence_length = sequence_length
+        self.reward_params = reward_params
         self.summary_prefix = summary_prefix
         self.done_event = done_event
         self.define_networks()
@@ -112,13 +114,12 @@ class Worker:
         #   - self.critic_remaining_net_dim
         raise NotImplementedError("This method must be overwritten.")
 
-    def define_reward_scale(self):
+    def define_reward(self, **params):
         raise NotImplementedError("This method must be overwritten.")
 
     def define_networks(self):
         self.define_net_dims()
         with tf.device(self.device):
-            self.define_reward_scale()
             # define model
             self.define_model()
             # define reinforcement learning
@@ -136,13 +137,11 @@ class Worker:
         self.model_outputs = prev_layer
         self.model_losses = (self.model_outputs - self.model_targets) ** 2
         self.model_loss = tf.reduce_mean(self.model_losses, name="loss")
-        self.reward_scale = (1 - self.discount_factor) / self.model_loss_converges_to
-        self.reward = - self.reward_scale * self.model_loss
-        # self.optimizer = tf.train.RMSPropOptimizer(0.0025, 0.99, 0.0, 1e-6)
+        self.define_reward(**self.reward_params)
         self.global_model_step = tf.Variable(0, dtype=tf.int32)
         self.model_optimizer = tf.train.AdamOptimizer(1e-3)
         self.model_train_op = self.model_optimizer.minimize(self.model_loss, global_step=self.global_model_step)
-        self.model_loss_summary = tf.summary.scalar(self.summary_prefix + "/model_loss", self.model_loss)
+        self.model_loss_summary = tf.summary.scalar(self.summary_prefix + "/model_loss_at_model_time", self.model_loss)
         self.model_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_model_time", self.reward)
         self.model_summary = tf.summary.merge([self.model_loss_summary, self.model_reward_summary])
 
@@ -214,12 +213,9 @@ class Worker:
     def restore(self, path):
         if self.task_index == 0:
             self.saver.restore(self.sess, os.path.normpath(path + "/network.ckpt"))
+            print("{} variables restored from {}".format(self.name, path))
         self.done_event.set()
         self.server.join()
-
-    def environment_step(self):
-        for _ in range(self.env_step_length):
-            self.env.step()
 
     def run_reinforcement_learning(self, n_updates, train_actor=True):
         global_rl_step = self.sess.run(self.global_rl_step)
@@ -233,10 +229,10 @@ class Worker:
         self.done_event.set()
         self.server.join()
 
-    def run_display(self):
+    def run_display(self, sample=True):
         win = viewer.JointAgentWindow(self.discount_factor, return_lookback=300)
         while not self.done_event.is_set():
-            self.run_n_display_steps(win)
+            self.run_n_display_steps(win, sample)
         win.close()
 
     def run_model(self, n_updates):
@@ -282,7 +278,7 @@ class Worker:
             action_dict = actions_dict_from_array(action)
             self.env.set_positions(action_dict)
             # run environment step
-            self.environment_step()
+            self.env.env_step()
             # get next state
             model_state_next = self.get_model_state()
             # get reward
@@ -314,7 +310,7 @@ class Worker:
             t2 = time.time()
             action_dict = actions_dict_from_array(action)
             self.env.set_positions(action_dict)
-            self.environment_step()
+            self.env.env_step()
             t3 = time.time()
             t_state += 1000 * (t1 - t0)
             t_actor += 1000 * (t2 - t1)
@@ -323,8 +319,8 @@ class Worker:
         return states
 
     # TODO put that function in the subclass
-    def run_n_display_steps(self, win):
-        action_return_fetches = [self.sample_action, self.critic_value]
+    def run_n_display_steps(self, win, sample=True):
+        action_return_fetches = [self.sample_action if sample else self.mu, self.critic_value]
         predicted_positions_reward_fetches = [self.model_outputs, self.reward]
         for _ in range(self.sequence_length):
             # get current vision
@@ -341,7 +337,7 @@ class Worker:
             # run action in env
             action_dict = actions_dict_from_array(action)
             self.env.set_positions(action_dict)
-            self.environment_step()
+            self.env.env_step()
             # get current positions
             next_positions = self.env.discrete_positions
             # get predicted positions and reward
@@ -419,9 +415,6 @@ class JointAgentWorker(Worker):
             feed_dict[self.model_inputs] = np.reshape(np_states, new_shape_all)
         return feed_dict
 
-    def define_reward_scale(self):
-        self.model_loss_converges_to = -0.0413
-
     def define_net_dims(self):
         dummy_state = np.array(self.get_model_state())
         inp_dim = dummy_state.flatten().shape[0]
@@ -430,6 +423,23 @@ class JointAgentWorker(Worker):
         self.rl_shared_net_dim = [inp_dim, 600]
         self.actor_remaining_net_dim = [4]
         self.critic_remaining_net_dim = [1]
+
+
+class MinimizeJointAgentWorker(JointAgentWorker):
+    def define_reward(self, model_loss_converges_to):
+        reward_scale = (1 - self.discount_factor) / model_loss_converges_to
+        self.reward = - reward_scale * self.model_loss
+
+
+class MaximizeJointAgentWorker(JointAgentWorker):
+    def define_reward(self, model_loss_converges_to):
+        reward_scale = (1 - self.discount_factor) / model_loss_converges_to
+        self.reward = reward_scale * self.model_loss
+
+
+class TargetErrorJointAgentWorker(JointAgentWorker):
+    def define_reward(self, target_prediction_error):
+        self.reward = -tf.abs(self.model_loss - target_prediction_error)
 
 
 class Experiment:
@@ -448,15 +458,15 @@ class Experiment:
         self.args_env_display = list(args_env)
         self.args_env_display[5] = display_dpi
         self._define_tensorboard_process()
-        self._define_display_process()
+        self.display_process = None
 
         # Define processes:
     def _define_tensorboard_process(self):
         self.tensorboard_process = multiprocessing.Process(target=self.tensorboard_func)
 
-    def _define_display_process(self):
+    def _define_display_process(self, sample=True):
         self.display_event = multiprocessing.Event()
-        self.display_process = multiprocessing.Process(target=self.worker_display_func, daemon=True)
+        self.display_process = multiprocessing.Process(target=self.worker_display_func, args=(sample,), daemon=True)
 
     def _define_parameter_server_processes(self):
         for i in range(self.n_parameter_servers):
@@ -487,11 +497,11 @@ class Experiment:
             self.workers_processes.append(p)
             self.workers_events.append(multiprocessing.Event())
 
-    def worker_display_func(self):
+    def worker_display_func(self, sample=True):
         env = environment.Environment(*self.args_env_display)
         worker = self.WorkerCls(self.n_workers - 1, self.display_event, env, *self.args_worker)
         worker.wait_for_variables_initialization()
-        worker.run_display()
+        worker.run_display(sample)
 
     def tensorboard_func(self):
         port = get_available_port()
@@ -567,12 +577,13 @@ class Experiment:
             while p.is_alive():
                 time.sleep(0.1)
 
-    def start_display_worker(self):
-        if not self.display_process.is_alive():
+    def start_display_worker(self, sample=True):
+        if self.display_process is None or not self.display_process.is_alive():
+            self._define_display_process(sample)
             self.display_process.start()
 
     def close_display_worker(self):
-        if self.display_process.is_alive():
+        if self.display_process is not None and self.display_process.is_alive():
             self.display_event.set()
             while self.display_process.is_alive():
                 time.sleep(0.1)
@@ -662,11 +673,11 @@ if __name__ == "__main__":
 
     with Experiment(
             N_PARAMETER_SERVERS, N_WORKERS, JointAgentWorker,
-            "../experiments/sequence_128_env_step_45_df_000_max_pred", args_env, args_worker, display_dpi=3) as experiment:
+            "../experiments/sequence_128_env_step_45_df_000_max_pred_repetition_1", args_env, args_worker, display_dpi=3) as experiment:
         # experiment.start_display_worker()
         # experiment.start_tensorboard()
         experiment.save_model("initial")
-        for i in range(4):
+        for i in range(20):
             summary_prefix = "stage_{}".format(i)
             experiment.asynchronously_run_model(4000 if i == 0 else 1000, summary_prefix)
             experiment.save_model("after_model_{}".format(i))
