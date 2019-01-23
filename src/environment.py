@@ -17,7 +17,8 @@ def discretize(arr, mini, maxi, n):
 class Environment(object):
     """ 2D physics using box2d and a json conf file
     """
-    def __init__(self, world_file, skin_order, skin_resolution, xlim, ylim, dpi, dt=1 / 120.0, n_discrete=32):
+    def __init__(self, world_file, skin_order, skin_resolution, xlim, ylim, dpi, env_step_length,
+                 dt=1 / 120.0, n_discrete=32):
         """
 
             :param world_file: the json file from which all objects are created
@@ -38,6 +39,7 @@ class Environment(object):
         self._vel_iters = 6
         self._pos_iters = 2
         self._dpi = dpi
+        self.env_step_length = env_step_length
         self._n_discrete = n_discrete
         self.world = world
         self.bodies = bodies
@@ -110,6 +112,10 @@ class Environment(object):
         self._computed_discrete_speeds = False
         self._computed_target_positions = False
         self._computed_discrete_target_positions = False
+
+    def env_step(self):
+        for i in range(self.env_step_length):
+            self.step()
 
     def _get_state_vision(self):
         if self._computed_vision:
