@@ -74,7 +74,7 @@ class Worker:
         self.device = tf.train.replica_device_setter(worker_device=self.name, cluster=cluster)
         self.env = env
         self.discount_factor = discount_factor
-        self.entropy_coef = 0.01
+        self.entropy_coef = 0.0  # 0.01
         self.sequence_length = sequence_length
         self.reward_params = reward_params
         self.summary_prefix = summary_prefix
@@ -127,33 +127,30 @@ class Worker:
 
     def define_model(self):
         net_dim = self.model_net_dim
-        self.model_inputs = tf.placeholder(shape=[None, net_dim[0]], dtype=tf.float32)
-        self.model_targets = tf.placeholder(shape=[None, net_dim[-1]], dtype=tf.float32)
+        self.model_inputs = tf.placeholder(shape=[None, net_dim[0]], dtype=tf.float32, name="model_inputs")
+        self.model_targets = tf.placeholder(shape=[None, net_dim[-1]], dtype=tf.float32, name="model_targets")
         prev_layer = self.model_inputs
         with tf.variable_scope("model"):
             for i, d in enumerate(net_dim[1:]):
                 activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
                 prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
         self.model_outputs = prev_layer
-        self.model_losses = (self.model_outputs - self.model_targets) ** 2
+        self.model_losses = tf.reduce_mean((self.model_outputs - self.model_targets) ** 2, axis=-1)
         self.model_loss = tf.reduce_mean(self.model_losses, name="loss")
         self.define_reward(**self.reward_params)
-        batch_size = tf.shape(self.model_inputs)[0]
-        constant_gammas = tf.fill(dims=[batch_size], value=self.discount_factor)
-        decreasing_discounted_gammas = tf.cumprod(constant_gammas) / self.discount_factor
-        self.return_targets_not_bootstraped = tf.cumsum(self.reward * decreasing_discounted_gammas, reverse=True)
         self.global_model_step = tf.Variable(0, dtype=tf.int32)
         # optimizer / summary
         self.model_optimizer = tf.train.AdamOptimizer(1e-3)
         self.model_train_op = self.model_optimizer.minimize(self.model_loss, global_step=self.global_model_step)
         self.model_loss_at_model_time_summary = \
             tf.summary.scalar(self.summary_prefix + "/model_loss_at_model_time", self.model_loss)
-        self.model_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_model_time", self.reward)
+        self.model_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_model_time", tf.reduce_mean(self.rewards))
         self.model_summary = tf.summary.merge([self.model_loss_at_model_time_summary, self.model_reward_summary])
 
     def define_reinforcement_learning(self):
         net_dim = self.rl_shared_net_dim + self.actor_remaining_net_dim
         self.rl_inputs = tf.placeholder(shape=[None, net_dim[0]], dtype=tf.float32, name="actor_inputs")
+        self.return_targets_not_bootstraped = tf.placeholder(shape=[None], dtype=tf.float32, name="returns_target")
         batch_size = tf.shape(self.rl_inputs)[0]
         constant_gammas = tf.fill(dims=[batch_size], value=self.discount_factor)
         increasing_discounted_gammas = tf.cumprod(constant_gammas, reverse=True)
@@ -191,16 +188,20 @@ class Worker:
         # optimizer / summary
         self.global_rl_step = tf.Variable(0, dtype=tf.int32)
         self.critic_optimizer = tf.train.AdamOptimizer(5e-5)
+        # self.critic_optimizer = tf.train.AdamOptimizer(1e-3)
         self.critic_train_op = self.critic_optimizer.minimize(self.critic_loss, global_step=self.global_rl_step)
         self.rl_optimizer = tf.train.AdamOptimizer(5e-5)
         self.rl_train_op = self.rl_optimizer.minimize(0.00001 * self.actor_loss + self.critic_loss, global_step=self.global_rl_step)
-        self.model_loss_at_rl_time_summary = \
-            tf.summary.scalar(self.summary_prefix + "/model_loss_at_rl_time", self.model_loss)
         self.actor_loss_summary = tf.summary.scalar(self.summary_prefix + "/actor_loss", self.actor_loss)
+        self.actor_stddev_sumary = tf.summary.scalar(self.summary_prefix + "/actor_stddev", tf.reduce_mean(self.sigma))
         self.critic_loss_summary = tf.summary.scalar(self.summary_prefix + "/critic_loss", self.critic_loss)
-        self.rl_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_rl_time", tf.reduce_mean(self.reward))
+        self.rl_model_losses = tf.placeholder(shape=[None], dtype=tf.float32, name="rl_model_losses")
+        self.model_loss_at_rl_time_summary = \
+            tf.summary.scalar(self.summary_prefix + "/model_loss_at_rl_time", tf.reduce_mean(self.rl_model_losses))
+        self.rl_rewards = tf.placeholder(shape=[None], dtype=tf.float32, name="rl_rewards")
+        self.rl_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_rl_time", tf.reduce_mean(self.rl_rewards))
         self.rl_summary = tf.summary.merge([self.model_loss_at_rl_time_summary, self.actor_loss_summary,
-                                            self.critic_loss_summary, self.rl_reward_summary])
+                                            self.critic_loss_summary, self.rl_reward_summary, self.actor_stddev_sumary])
 
     def wait_for_variables_initialization(self):
         while len(self.sess.run(tf.report_uninitialized_variables())) > 0:
@@ -252,19 +253,19 @@ class Worker:
         self.server.join()
 
     def get_action(self):
-        rl_state = self.get_rl_state()
-        feed_dict = self.to_rl_feed_dict(rl_states=[rl_state])
+        state = self.get_rl_state()
+        feed_dict = self.to_rl_feed_dict(states=[state])
         action = self.sess.run(self.sample_action, feed_dict=feed_dict)
         return action[0]
 
     def run_n_rl_steps(self):
         model_states = []
-        rl_states = []
+        states = []
         actions = []
         for _ in range(self.sequence_length):
             # get states
             model_states.append(self.get_model_state())
-            rl_states.append(self.get_rl_state())
+            states.append(self.get_rl_state())
             # get action
             action = self.get_action()
             actions.append(action)
@@ -274,7 +275,7 @@ class Worker:
             # run environment step
             self.env.env_step()
         model_states.append(self.get_model_state())
-        return model_states, rl_states, actions
+        return model_states, states, actions
 
     def run_n_model_steps(self):
         states = []
@@ -303,16 +304,16 @@ class Worker:
     # TODO put that function in the subclass
     def run_n_display_steps(self, win, sample=True):
         action_return_fetches = [self.sample_action if sample else self.mu, self.critic_value]
-        predicted_positions_reward_fetches = [self.model_outputs, self.reward]
+        predicted_positions_reward_fetches = [self.model_outputs, self.rewards]
         for _ in range(self.sequence_length):
             # get current vision
             vision = self.env.vision
             # get current positions
             current_positions = self.env.discrete_positions
             # get action and predicted return
-            rl_states = [self.get_rl_state()]
+            states = [self.get_rl_state()]
             model_states = [self.get_model_state()]
-            rl_feed_dict = self.to_rl_feed_dict(rl_states=rl_states)
+            rl_feed_dict = self.to_rl_feed_dict(states=states)
             actions, predicted_returns = self.sess.run(action_return_fetches, feed_dict=rl_feed_dict)
             action = actions[0]
             predicted_return = predicted_returns[0]
@@ -325,7 +326,8 @@ class Worker:
             # get predicted positions and reward
             model_states.append(self.get_model_state())
             model_feed_dict = self.to_model_feed_dict(states=model_states, targets=True)
-            predicted_positions, current_reward = self.sess.run(predicted_positions_reward_fetches, feed_dict=model_feed_dict)
+            predicted_positions, current_rewards = self.sess.run(predicted_positions_reward_fetches, feed_dict=model_feed_dict)
+            current_reward = current_rewards[0]
             predicted_positions = predicted_positions[0].reshape((4, -1))
             # display
             win(vision, current_positions, predicted_positions, next_positions, current_reward, predicted_return)
@@ -339,7 +341,9 @@ class Worker:
         return returns
 
     def update_reinforcement_learning(self, model_states, rl_states, actions, train_actor=True):
-        feed_dict = self.to_rl_feed_dict(model_states=model_states, rl_states=rl_states, actions=actions)
+        feed_dict = self.to_model_feed_dict(states=model_states, targets=True)
+        rewards, model_losses = self.sess.run([self.rewards, self.model_losses], feed_dict=feed_dict)
+        feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards, model_losses=model_losses)
         train_op = self.rl_train_op if train_actor else self.critic_train_op
         fetches = [self.actor_loss, self.critic_loss, self.global_rl_step, train_op, self.rl_summary]
         aloss, closs, global_rl_step, _, rl_summary = self.sess.run(fetches, feed_dict=feed_dict)
@@ -368,23 +372,23 @@ class JointAgentWorker(Worker):
     def get_rl_state(self):
         return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
 
-    def to_rl_feed_dict(self, model_states=None, rl_states=None, actions=None):
+    def to_rl_feed_dict(self, states=None, actions=None, rewards=None, model_losses=None):
         # transforms the inputs into a feed dict for the actor
         feed_dict = {}
-        if rl_states is not None:
-            np_rl_states = np.array(rl_states)
+        if states is not None:
+            np_rl_states = np.array(states)
             new_shape = (-1, np.prod(np_rl_states.shape[1:]))
             feed_dict[self.rl_inputs] = np.reshape(np_rl_states, new_shape)
         if actions is not None:
             np_actions = np.array(actions)
             feed_dict[self.actions] = np_actions
-        if model_states is not None:
+        if rewards is not None:
             # reverse pass through the rewards here...
-            np_model_states = np.array(model_states)
-            new_shape_all = (-1, np.prod(np_model_states.shape[1:]))
-            new_shape_target = (-1, np.prod(np_model_states[:, 0].shape[1:]))
-            feed_dict[self.model_inputs] = np.reshape(np_model_states[:-1], new_shape_all)
-            feed_dict[self.model_targets] = np.reshape(np_model_states[1:, 0], new_shape_target)
+            returns = self.rewards_to_return(rewards)
+            feed_dict[self.rl_rewards] = rewards
+            feed_dict[self.return_targets_not_bootstraped] = returns
+        if model_losses is not None:
+            feed_dict[self.rl_model_losses] = model_losses
         return feed_dict
 
     def to_model_feed_dict(self, states, targets=False):
@@ -412,18 +416,18 @@ class JointAgentWorker(Worker):
 class MinimizeJointAgentWorker(JointAgentWorker):
     def define_reward(self, model_loss_converges_to):
         reward_scale = (1 - self.discount_factor) / model_loss_converges_to
-        self.reward = - reward_scale * self.model_loss
+        self.rewards = - reward_scale * self.model_losses
 
 
 class MaximizeJointAgentWorker(JointAgentWorker):
     def define_reward(self, model_loss_converges_to):
         reward_scale = (1 - self.discount_factor) / model_loss_converges_to
-        self.reward = reward_scale * self.model_loss
+        self.rewards = reward_scale * self.model_losses
 
 
 class TargetErrorJointAgentWorker(JointAgentWorker):
     def define_reward(self, target_prediction_error):
-        self.reward = -tf.abs(self.model_loss - target_prediction_error) * (1 - self.discount_factor) / 0.04
+        self.rewards = -tf.abs(self.model_losses - target_prediction_error) * (1 - self.discount_factor) / 0.04
 
 
 class Experiment:

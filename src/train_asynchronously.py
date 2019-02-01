@@ -122,7 +122,6 @@ with ac.Experiment(
     for i in range(args.n_stages):
             summary_prefix = "stage_{}".format(i)
             experiment.asynchronously_run_model(4000 if i == 0 else 1000, summary_prefix)
-            # experiment.asynchronously_run_model(500, summary_prefix)
             experiment.save_model("after_model_{}".format(i))
             experiment.asynchronously_run_reinforcement_learning(500, summary_prefix, train_actor=False)
             experiment.asynchronously_run_reinforcement_learning(2500, summary_prefix, train_actor=True)
