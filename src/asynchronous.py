@@ -187,6 +187,8 @@ class Worker:
         self.actor_loss = tf.reduce_sum(self.actor_losses, name="loss")
         # optimizer / summary
         self.global_rl_step = tf.Variable(0, dtype=tf.int32)
+        self.global_both_step = tf.Variable(0, dtype=tf.int32)
+        self.global_both_step_inc = self.global_both_step.assign_add(1)
         self.critic_optimizer = tf.train.AdamOptimizer(5e-5)
         # self.critic_optimizer = tf.train.AdamOptimizer(1e-3)
         self.critic_train_op = self.critic_optimizer.minimize(self.critic_loss, global_step=self.global_rl_step)
@@ -202,6 +204,12 @@ class Worker:
         self.rl_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_rl_time", tf.reduce_mean(self.rl_rewards))
         self.rl_summary = tf.summary.merge([self.model_loss_at_rl_time_summary, self.actor_loss_summary,
                                             self.critic_loss_summary, self.rl_reward_summary, self.actor_stddev_sumary])
+
+        self.model_loss_summary = \
+            tf.summary.scalar(self.summary_prefix + "/model_loss", tf.reduce_mean(self.rl_model_losses))
+        self.reward_summary = tf.summary.scalar(self.summary_prefix + "/reward", tf.reduce_mean(self.rl_rewards))
+        self.both_summary = tf.summary.merge([self.model_loss_summary, self.actor_loss_summary,
+                                            self.critic_loss_summary, self.reward_summary, self.actor_stddev_sumary])
 
     def wait_for_variables_initialization(self):
         while len(self.sess.run(tf.report_uninitialized_variables())) > 0:
@@ -230,6 +238,18 @@ class Worker:
             transitions = self.run_n_rl_steps()
             # Update the global networks
             global_rl_step = self.update_reinforcement_learning(*transitions, train_actor=train_actor)
+        self.summary_writer.flush()
+        self.done_event.set()
+        self.server.join()
+
+    def run_all(self, n_updates, train_actor=True):
+        global_both_step = self.sess.run(self.global_both_step)
+        n_updates += global_both_step
+        while global_both_step < n_updates - self._n_workers:
+            # Collect some experience
+            transitions = self.run_n_rl_steps()
+            # Update the global networks
+            global_both_step = self.update_all(*transitions, train_actor=train_actor)
         self.summary_writer.flush()
         self.done_event.set()
         self.server.join()
@@ -279,26 +299,15 @@ class Worker:
 
     def run_n_model_steps(self):
         states = []
-        t_state = 0
-        t_actor = 0
-        t_env = 0
         for _ in range(self.sequence_length):
             # get state
-            t0 = time.time()
             states.append(self.get_model_state())
             # get action
-            t1 = time.time()
             action = self.get_action()
             # run action in env
-            t2 = time.time()
             action_dict = actions_dict_from_array(action)
             self.env.set_positions(action_dict)
             self.env.env_step()
-            t3 = time.time()
-            t_state += 1000 * (t1 - t0)
-            t_actor += 1000 * (t2 - t1)
-            t_env += 1000 * (t3 - t2)
-        # print(self.name + " profiling run_n_model_steps: get_state {:.1f}ms  actor {:.1f}ms  env {:.1f}ms".format(t_state, t_actor, t_env))
         return states
 
     # TODO put that function in the subclass
@@ -350,7 +359,7 @@ class Worker:
         self.summary_writer.add_summary(rl_summary, global_step=global_rl_step)
         if global_rl_step % 100 <= self._n_workers:
             self.summary_writer.flush()
-        print("{} finished update number {} (actor loss = {:.3f}     critic loss = {:.3f})".format(
+        print("{} finished update number {} (actor loss = {:.3f}  critic loss = {:.3f})".format(
               self.name, global_rl_step, aloss, closs))
         return global_rl_step
 
@@ -363,6 +372,21 @@ class Worker:
             self.summary_writer.flush()
         print("{} finished update number {} (loss = {:.3f})".format(self.name, global_model_step, loss))
         return global_model_step
+
+    def update_all(self, model_states, rl_states, actions, train_actor=True):
+        feed_dict = self.to_model_feed_dict(states=model_states, targets=True)
+        fetches = [self.rewards, self.model_losses, self.model_loss, self.model_train_op]
+        rewards, model_losses, mloss, _ = self.sess.run(fetches, feed_dict=feed_dict)
+        feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards, model_losses=model_losses)
+        train_op = self.rl_train_op if train_actor else self.critic_train_op
+        fetches = [self.actor_loss, self.critic_loss, self.global_both_step_inc, train_op, self.both_summary]
+        aloss, closs, global_both_step, _, both_summary = self.sess.run(fetches, feed_dict=feed_dict)
+        self.summary_writer.add_summary(both_summary, global_step=global_both_step)
+        if global_both_step % 100 <= self._n_workers:
+            self.summary_writer.flush()
+        print("{} finished update number {} (model loss = {:.3f}  critic loss = {:.3f})".format(
+              self.name, global_both_step, mloss, closs))
+        return global_both_step
 
 
 class JointAgentWorker(Worker):
@@ -430,6 +454,13 @@ class TargetErrorJointAgentWorker(JointAgentWorker):
         self.rewards = -tf.abs(self.model_losses - target_prediction_error) * (1 - self.discount_factor) / 0.04
 
 
+class RangeErrorJointAgentWorker(JointAgentWorker):
+    def define_reward(self, range_mini, range_maxi):
+        mean = (range_maxi + range_mini) / 2
+        dist = (range_maxi - range_mini) / 2
+        self.rewards = -tf.nn.relu(-(dist - tf.abs(self.model_losses - mean)) * (1 - self.discount_factor) / 0.04)
+
+
 class Experiment:
     def __init__(self, n_parameter_servers, n_workers, WorkerCls, experiment_dir, args_env, args_worker, display_dpi=3):
         self.n_parameter_servers = n_parameter_servers
@@ -470,6 +501,12 @@ class Experiment:
     def _define_workers_rl_processes(self, n_updates, summary_prefix, train_actor=True):
         for i in range(self.n_workers):
             p = multiprocessing.Process(target=self.worker_rl_func, args=(i, n_updates, summary_prefix, train_actor), daemon=True)
+            self.workers_processes.append(p)
+            self.workers_events.append(multiprocessing.Event())
+
+    def _define_workers_both_processes(self, n_updates, summary_prefix, train_actor=True):
+        for i in range(self.n_workers):
+            p = multiprocessing.Process(target=self.worker_both_func, args=(i, n_updates, summary_prefix, train_actor), daemon=True)
             self.workers_processes.append(p)
             self.workers_events.append(multiprocessing.Event())
 
@@ -516,6 +553,12 @@ class Experiment:
         worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker, summary_prefix=summary_prefix)
         worker.wait_for_variables_initialization()
         worker.run_reinforcement_learning(n_updates, train_actor)
+
+    def worker_both_func(self, task_index, n_updates, summary_prefix, train_actor=True):
+        env = environment.Environment(*self.args_env)
+        worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker, summary_prefix=summary_prefix)
+        worker.wait_for_variables_initialization()
+        worker.run_all(n_updates, train_actor)
 
     def worker_save_func(self, task_index, path):
         env = environment.Environment(*self.args_env)
@@ -582,6 +625,10 @@ class Experiment:
 
     def asynchronously_run_reinforcement_learning(self, n_updates, summary_prefix, train_actor=True):
         self._define_workers_rl_processes(n_updates, summary_prefix, train_actor=train_actor)
+        self._start_workers_processes()
+
+    def asynchronously_run_both(self, n_updates, summary_prefix, train_actor=True):
+        self._define_workers_both_processes(n_updates, summary_prefix, train_actor=train_actor)
         self._start_workers_processes()
 
     def save_model(self, name):

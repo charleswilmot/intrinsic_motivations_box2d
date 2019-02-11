@@ -3,6 +3,7 @@ import asynchronous as ac
 import environment
 import argparse
 import pickle
+import json
 
 
 parser = argparse.ArgumentParser()
@@ -32,7 +33,39 @@ parser.add_argument(
     type=int,
     action='store',
     default=4,
-    help="Number of stages to compute (one stage = model + rl)"
+    help="Stage-wise setting. Specify nNumber of stages to compute (one stage = model + rl)"
+)
+
+parser.add_argument(
+    '--model-stage-length',
+    type=int,
+    action='store',
+    default=1000,
+    help="Stage-wise setting. Specify number of model iterations"
+)
+
+parser.add_argument(
+    '--critic-stage-length',
+    type=int,
+    action='store',
+    default=500,
+    help="Stage-wise setting. Specify number of critic alone iterations"
+)
+
+parser.add_argument(
+    '--actor-stage-length',
+    type=int,
+    action='store',
+    default=2500,
+    help="Stage-wise setting. Specify number of rl iterations"
+)
+
+parser.add_argument(
+    '-c', '--continuous',
+    type=int,
+    action='store',
+    default=None,
+    help="Train continuously. Pass the number of iteration."
 )
 
 parser.add_argument(
@@ -91,6 +124,15 @@ parser.add_argument(
     default=None
 )
 
+parser.add_argument(
+    '--range-pred-err',
+    type=float,
+    nargs=2,
+    action='store',
+    help="Reward type. Pass the 'range_mini' and 'range_maxi' params",
+    default=None
+)
+
 
 args = parser.parse_args()
 with open(args.environment_conf, "rb") as f:
@@ -104,6 +146,9 @@ elif args.maximize_pred_err is not None:
 elif args.target_pred_err is not None:
     WorkerCls = ac.TargetErrorJointAgentWorker
     reward_params = {"target_prediction_error": args.target_pred_err}
+elif args.range_pred_err is not None:
+    WorkerCls = ac.RangeErrorJointAgentWorker
+    reward_params = {"range_mini": args.range_pred_err[0], "range_maxi": args.range_pred_err[1]}
 else:
     WorkerCls = ac.MinimizeJointAgentWorker
     reward_params = {"model_loss_converges_to": 0.043}
@@ -113,16 +158,33 @@ args_worker = (args.discount_factor, args.sequence_length, reward_params)
 with ac.Experiment(
         args.n_parameter_servers, args.n_workers, WorkerCls,
         args.path, args_env, args_worker, display_dpi=3) as experiment:
+    ### save command line
     with open(args.path + "/cmd.txt", "w") as f:
         f.write("python3 " + " ".join(sys.argv))
+    with open(args.path + "/parameters.json", "w") as f:
+        json.dump(args.__dict__, fp=f, indent=4, sort_keys=True)
+    ### start display if needed
     if args.display:
         experiment.start_display_worker()
         experiment.start_tensorboard()
+    ### Save initial weights
     experiment.save_model("initial")
-    for i in range(args.n_stages):
-            summary_prefix = "stage_{}".format(i)
-            experiment.asynchronously_run_model(4000 if i == 0 else 1000, summary_prefix)
-            experiment.save_model("after_model_{}".format(i))
-            experiment.asynchronously_run_reinforcement_learning(500, summary_prefix, train_actor=False)
-            experiment.asynchronously_run_reinforcement_learning(2500, summary_prefix, train_actor=True)
-            experiment.save_model("after_rl_{}".format(i))
+    if args.continuous:
+        ### continuous learning
+        done = 0
+        save_every = 2000
+        i = 0
+        while done < args.continuous:
+            experiment.asynchronously_run_both(save_every, "continuous")
+            done += save_every
+            experiment.save_model("{}".format(i))
+            i += 1
+    else:
+        ### stage-wise learning
+        for i in range(args.n_stages):
+                summary_prefix = "stage_{}".format(i)
+                experiment.asynchronously_run_model(args.model_stage_length, summary_prefix)
+                experiment.save_model("after_model_{}".format(i))
+                experiment.asynchronously_run_reinforcement_learning(args.critic_stage_length, summary_prefix, train_actor=False)
+                experiment.asynchronously_run_reinforcement_learning(args.actor_stage_length, summary_prefix, train_actor=True)
+                experiment.save_model("after_rl_{}".format(i))

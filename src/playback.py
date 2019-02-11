@@ -65,6 +65,16 @@ parser.add_argument(
     default=None
 )
 
+parser.add_argument(
+    '--range-pred-err',
+    type=float,
+    nargs=2,
+    action='store',
+    help="Reward type. Pass the 'range_mini' and 'range_maxi' params",
+    default=None
+)
+
+
 SEQUENCE_LENGTH = 8
 N_WORKERS = 2
 N_PARAMETER_SERVERS = 1
@@ -83,6 +93,9 @@ elif args.maximize_pred_err is not None:
 elif args.target_pred_err is not None:
     WorkerCls = ac.TargetErrorJointAgentWorker
     reward_params = {"target_prediction_error": args.target_pred_err}
+elif args.range_pred_err is not None:
+    WorkerCls = ac.RangeErrorJointAgentWorker
+    reward_params = {"range_mini": args.range_pred_err[0], "range_maxi": args.range_pred_err[1]}
 else:
     WorkerCls = ac.MinimizeJointAgentWorker
     reward_params = {"model_loss_converges_to": 0.043}
@@ -93,16 +106,18 @@ args_worker = (args.discount_factor, SEQUENCE_LENGTH, reward_params)
 
 models = [x for x in os.listdir(args.path) if os.path.isdir(args.path + "/" + x)]
 initial = [x for x in models if re.match("initial", x)]
-after_model = [x for x in models if re.match("after_model_*", x)]
-after_rl = [x for x in models if re.match("after_rl_*", x)]
+after_model = [x for x in models if re.match("after_model_[0-9]+", x)]
+after_rl = [x for x in models if re.match("after_rl_[0-9]+", x)]
+continuous = [x for x in models if re.match("[0-9]+", x)]
 after_model.sort(key=lambda x: int(re.match("after_model_([0-9]+)", x).group(1)))
 after_rl.sort(key=lambda x: int(re.match("after_rl_([0-9]+)", x).group(1)))
+continuous.sort(key=lambda x: int(re.match("([0-9]+)", x).group(1)))
 ordered_models = initial + [val for pair in zip(after_model, after_rl) for val in pair]
 
 if args.after_rl_only:
-    models = initial + after_rl
+    models = initial + after_rl + continuous
 else:
-    models = ordered_models
+    models = ordered_models + continuous
 
 with ac.Experiment(
         N_PARAMETER_SERVERS, N_WORKERS, WorkerCls,
