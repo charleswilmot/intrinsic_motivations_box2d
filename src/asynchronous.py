@@ -118,98 +118,7 @@ class Worker:
         raise NotImplementedError("This method must be overwritten.")
 
     def define_networks(self):
-        self.define_net_dims()
-        with tf.device(self.device):
-            # define model
-            self.define_model()
-            # define reinforcement learning
-            self.define_reinforcement_learning()
-
-    def define_model(self):
-        net_dim = self.model_net_dim
-        self.model_inputs = tf.placeholder(shape=[None, net_dim[0]], dtype=tf.float32, name="model_inputs")
-        self.model_targets = tf.placeholder(shape=[None, net_dim[-1]], dtype=tf.float32, name="model_targets")
-        prev_layer = self.model_inputs
-        with tf.variable_scope("model"):
-            for i, d in enumerate(net_dim[1:]):
-                activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
-                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
-        self.model_outputs = prev_layer
-        self.model_losses = tf.reduce_mean((self.model_outputs - self.model_targets) ** 2, axis=-1)
-        self.model_loss = tf.reduce_mean(self.model_losses, name="loss")
-        self.define_reward(**self.reward_params)
-        self.global_model_step = tf.Variable(0, dtype=tf.int32)
-        # optimizer / summary
-        self.model_optimizer = tf.train.AdamOptimizer(1e-3)
-        self.model_train_op = self.model_optimizer.minimize(self.model_loss, global_step=self.global_model_step)
-        self.model_loss_at_model_time_summary = \
-            tf.summary.scalar(self.summary_prefix + "/model_loss_at_model_time", self.model_loss)
-        self.model_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_model_time", tf.reduce_mean(self.rewards))
-        self.model_summary = tf.summary.merge([self.model_loss_at_model_time_summary, self.model_reward_summary])
-
-    def define_reinforcement_learning(self):
-        net_dim = self.rl_shared_net_dim + self.actor_remaining_net_dim
-        self.rl_inputs = tf.placeholder(shape=[None, net_dim[0]], dtype=tf.float32, name="actor_inputs")
-        self.return_targets_not_bootstraped = tf.placeholder(shape=[None], dtype=tf.float32, name="returns_target")
-        batch_size = tf.shape(self.rl_inputs)[0]
-        constant_gammas = tf.fill(dims=[batch_size], value=self.discount_factor)
-        increasing_discounted_gammas = tf.cumprod(constant_gammas, reverse=True)
-        prev_layer = self.rl_inputs
-        with tf.variable_scope("shared"):
-            for i, d in enumerate(self.rl_shared_net_dim[1:]):
-                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i))
-        fork_layer = prev_layer
-        with tf.variable_scope("private_to_critic"):
-            for i, d in enumerate(self.critic_remaining_net_dim):
-                activation_fn = tf.nn.relu if i < len(self.critic_remaining_net_dim) - 1 else None
-                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
-            self.critic_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
-        self.return_targets = self.return_targets_not_bootstraped + increasing_discounted_gammas * self.critic_value[-1]
-        self.critic_losses = (self.critic_value - self.return_targets) ** 2
-        self.critic_loss = tf.reduce_mean(self.critic_losses, name="loss")
-        self.actions = tf.placeholder(shape=[None, net_dim[-1]], dtype=tf.float32, name="actor_picked_actions")  # picked actions
-        self.actor_targets = self.return_targets - self.critic_value
-        targets = tf.expand_dims(self.actor_targets, -1)
-        prev_layer = fork_layer
-        with tf.variable_scope("private_to_actor"):
-            for i, d in enumerate(self.actor_remaining_net_dim[:-1]):
-                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i))
-            self.mu = tl.fully_connected(prev_layer, self.actor_remaining_net_dim[-1], activation_fn=None, scope="mean_actions")
-            self.log_sigma_2 = tl.fully_connected(prev_layer, self.actor_remaining_net_dim[-1], activation_fn=None, scope="log_variance_actions")
-        self.sigma_2 = tf.exp(self.log_sigma_2)
-        self.sigma = tf.exp(0.5 * self.log_sigma_2)
-        self.sample_action = tf.random_normal(shape=tf.shape(self.mu)) * self.sigma + self.mu
-        self.probs = 1 / (tf.sqrt(2 * pi * self.sigma_2)) * tf.exp(-(self.actions - self.mu) ** 2 / (2 * self.sigma_2))
-        self.log_probs = -0.5 * (log(2 * pi) + self.log_sigma_2 + (self.actions - self.mu) ** 2 / self.sigma_2)
-        self.entropy = 0.5 * (1 + log(2 * pi) + self.log_sigma_2)
-        self.entropy_mean = tf.reduce_mean(self.entropy, name="entropy_mean")
-        self.actor_losses = -self.log_probs * targets - self.entropy_coef * self.entropy
-        self.actor_loss = tf.reduce_sum(self.actor_losses, name="loss")
-        # optimizer / summary
-        self.global_rl_step = tf.Variable(0, dtype=tf.int32)
-        self.global_both_step = tf.Variable(0, dtype=tf.int32)
-        self.global_both_step_inc = self.global_both_step.assign_add(1)
-        self.critic_optimizer = tf.train.AdamOptimizer(5e-5)
-        # self.critic_optimizer = tf.train.AdamOptimizer(1e-3)
-        self.critic_train_op = self.critic_optimizer.minimize(self.critic_loss, global_step=self.global_rl_step)
-        self.rl_optimizer = tf.train.AdamOptimizer(5e-5)
-        self.rl_train_op = self.rl_optimizer.minimize(0.00001 * self.actor_loss + self.critic_loss, global_step=self.global_rl_step)
-        self.actor_loss_summary = tf.summary.scalar(self.summary_prefix + "/actor_loss", self.actor_loss)
-        self.actor_stddev_sumary = tf.summary.scalar(self.summary_prefix + "/actor_stddev", tf.reduce_mean(self.sigma))
-        self.critic_loss_summary = tf.summary.scalar(self.summary_prefix + "/critic_loss", self.critic_loss)
-        self.rl_model_losses = tf.placeholder(shape=[None], dtype=tf.float32, name="rl_model_losses")
-        self.model_loss_at_rl_time_summary = \
-            tf.summary.scalar(self.summary_prefix + "/model_loss_at_rl_time", tf.reduce_mean(self.rl_model_losses))
-        self.rl_rewards = tf.placeholder(shape=[None], dtype=tf.float32, name="rl_rewards")
-        self.rl_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_rl_time", tf.reduce_mean(self.rl_rewards))
-        self.rl_summary = tf.summary.merge([self.model_loss_at_rl_time_summary, self.actor_loss_summary,
-                                            self.critic_loss_summary, self.rl_reward_summary, self.actor_stddev_sumary])
-
-        self.model_loss_summary = \
-            tf.summary.scalar(self.summary_prefix + "/model_loss", tf.reduce_mean(self.rl_model_losses))
-        self.reward_summary = tf.summary.scalar(self.summary_prefix + "/reward", tf.reduce_mean(self.rl_rewards))
-        self.both_summary = tf.summary.merge([self.model_loss_summary, self.actor_loss_summary,
-                                            self.critic_loss_summary, self.reward_summary, self.actor_stddev_sumary])
+        raise NotImplementedError("This method must be overwritten.")
 
     def wait_for_variables_initialization(self):
         while len(self.sess.run(tf.report_uninitialized_variables())) > 0:
@@ -390,6 +299,100 @@ class Worker:
 
 
 class JointAgentWorker(Worker):
+    def define_networks(self):
+        self.define_net_dims()
+        with tf.device(self.device):
+            # define model
+            self.define_model()
+            # define reinforcement learning
+            self.define_reinforcement_learning()
+
+    def define_model(self):
+        net_dim = self.model_net_dim
+        self.model_inputs = tf.placeholder(shape=[None, net_dim[0]], dtype=tf.float32, name="model_inputs")
+        self.model_targets = tf.placeholder(shape=[None, net_dim[-1]], dtype=tf.float32, name="model_targets")
+        prev_layer = self.model_inputs
+        with tf.variable_scope("model"):
+            for i, d in enumerate(net_dim[1:]):
+                activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
+        self.model_outputs = prev_layer
+        self.model_losses = tf.reduce_mean((self.model_outputs - self.model_targets) ** 2, axis=-1)
+        self.model_loss = tf.reduce_mean(self.model_losses, name="loss")
+        self.define_reward(**self.reward_params)
+        self.global_model_step = tf.Variable(0, dtype=tf.int32)
+        # optimizer / summary
+        self.model_optimizer = tf.train.AdamOptimizer(1e-3)
+        self.model_train_op = self.model_optimizer.minimize(self.model_loss, global_step=self.global_model_step)
+        self.model_loss_at_model_time_summary = \
+            tf.summary.scalar(self.summary_prefix + "/model_loss_at_model_time", self.model_loss)
+        self.model_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_model_time", tf.reduce_mean(self.rewards))
+        self.model_summary = tf.summary.merge([self.model_loss_at_model_time_summary, self.model_reward_summary])
+
+    def define_reinforcement_learning(self):
+        net_dim = self.rl_shared_net_dim + self.actor_remaining_net_dim
+        self.rl_inputs = tf.placeholder(shape=[None, net_dim[0]], dtype=tf.float32, name="actor_inputs")
+        self.return_targets_not_bootstraped = tf.placeholder(shape=[None], dtype=tf.float32, name="returns_target")
+        batch_size = tf.shape(self.rl_inputs)[0]
+        constant_gammas = tf.fill(dims=[batch_size], value=self.discount_factor)
+        increasing_discounted_gammas = tf.cumprod(constant_gammas, reverse=True)
+        prev_layer = self.rl_inputs
+        with tf.variable_scope("shared"):
+            for i, d in enumerate(self.rl_shared_net_dim[1:]):
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i))
+        fork_layer = prev_layer
+        with tf.variable_scope("private_to_critic"):
+            for i, d in enumerate(self.critic_remaining_net_dim):
+                activation_fn = tf.nn.relu if i < len(self.critic_remaining_net_dim) - 1 else None
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
+            self.critic_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
+        self.return_targets = self.return_targets_not_bootstraped + increasing_discounted_gammas * self.critic_value[-1]
+        self.critic_losses = (self.critic_value - self.return_targets) ** 2
+        self.critic_loss = tf.reduce_mean(self.critic_losses, name="loss")
+        self.actions = tf.placeholder(shape=[None, net_dim[-1]], dtype=tf.float32, name="actor_picked_actions")  # picked actions
+        self.actor_targets = self.return_targets - self.critic_value
+        targets = tf.expand_dims(self.actor_targets, -1)
+        prev_layer = fork_layer
+        with tf.variable_scope("private_to_actor"):
+            for i, d in enumerate(self.actor_remaining_net_dim[:-1]):
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i))
+            self.mu = tl.fully_connected(prev_layer, self.actor_remaining_net_dim[-1], activation_fn=None, scope="mean_actions")
+            self.log_sigma_2 = tl.fully_connected(prev_layer, self.actor_remaining_net_dim[-1], activation_fn=None, scope="log_variance_actions")
+        self.sigma_2 = tf.exp(self.log_sigma_2)
+        self.sigma = tf.exp(0.5 * self.log_sigma_2)
+        self.sample_action = tf.random_normal(shape=tf.shape(self.mu)) * self.sigma + self.mu
+        self.probs = 1 / (tf.sqrt(2 * pi * self.sigma_2)) * tf.exp(-(self.actions - self.mu) ** 2 / (2 * self.sigma_2))
+        self.log_probs = -0.5 * (log(2 * pi) + self.log_sigma_2 + (self.actions - self.mu) ** 2 / self.sigma_2)
+        self.entropy = 0.5 * (1 + log(2 * pi) + self.log_sigma_2)
+        self.entropy_mean = tf.reduce_mean(self.entropy, name="entropy_mean")
+        self.actor_losses = -self.log_probs * targets - self.entropy_coef * self.entropy
+        self.actor_loss = tf.reduce_sum(self.actor_losses, name="loss")
+        # optimizer / summary
+        self.global_rl_step = tf.Variable(0, dtype=tf.int32)
+        self.global_both_step = tf.Variable(0, dtype=tf.int32)
+        self.global_both_step_inc = self.global_both_step.assign_add(1)
+        self.critic_optimizer = tf.train.AdamOptimizer(5e-5)
+        # self.critic_optimizer = tf.train.AdamOptimizer(1e-3)
+        self.critic_train_op = self.critic_optimizer.minimize(self.critic_loss, global_step=self.global_rl_step)
+        self.rl_optimizer = tf.train.AdamOptimizer(5e-5)
+        self.rl_train_op = self.rl_optimizer.minimize(0.00001 * self.actor_loss + self.critic_loss, global_step=self.global_rl_step)
+        self.actor_loss_summary = tf.summary.scalar(self.summary_prefix + "/actor_loss", self.actor_loss)
+        self.actor_stddev_sumary = tf.summary.scalar(self.summary_prefix + "/actor_stddev", tf.reduce_mean(self.sigma))
+        self.critic_loss_summary = tf.summary.scalar(self.summary_prefix + "/critic_loss", self.critic_loss)
+        self.rl_model_losses = tf.placeholder(shape=[None], dtype=tf.float32, name="rl_model_losses")
+        self.model_loss_at_rl_time_summary = \
+            tf.summary.scalar(self.summary_prefix + "/model_loss_at_rl_time", tf.reduce_mean(self.rl_model_losses))
+        self.rl_rewards = tf.placeholder(shape=[None], dtype=tf.float32, name="rl_rewards")
+        self.rl_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_rl_time", tf.reduce_mean(self.rl_rewards))
+        self.rl_summary = tf.summary.merge([self.model_loss_at_rl_time_summary, self.actor_loss_summary,
+                                            self.critic_loss_summary, self.rl_reward_summary, self.actor_stddev_sumary])
+
+        self.model_loss_summary = \
+            tf.summary.scalar(self.summary_prefix + "/model_loss", tf.reduce_mean(self.rl_model_losses))
+        self.reward_summary = tf.summary.scalar(self.summary_prefix + "/reward", tf.reduce_mean(self.rl_rewards))
+        self.both_summary = tf.summary.merge([self.model_loss_summary, self.actor_loss_summary,
+                                            self.critic_loss_summary, self.reward_summary, self.actor_stddev_sumary])
+
     def get_model_state(self):
         return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
 
