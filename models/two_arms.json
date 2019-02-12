@@ -478,7 +478,7 @@
           "fixture": [
               {
                   "name": "",
-                  "density": 1,
+                  "density": 100,
                   "group_index": 0,
                   "polygon": {
                       "vertices": {
@@ -511,7 +511,7 @@
           "fixture": [
               {
                   "name": "",
-                  "density": 1,
+                  "density": 100,
                   "group_index": 0,
                   "polygon": {
                       "vertices": {
@@ -544,7 +544,7 @@
           "fixture": [
               {
                   "name": "",
-                  "density": 1,
+                  "density": 100,
                   "group_index": 0,
                   "polygon": {
                       "vertices": {

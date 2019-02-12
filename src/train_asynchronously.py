@@ -133,25 +133,34 @@ parser.add_argument(
     default=None
 )
 
+parser.add_argument(
+    '--separate',
+    action='store_true',
+    help="Separate / joint model"
+)
+
 
 args = parser.parse_args()
 with open(args.environment_conf, "rb") as f:
     args_env = pickle.load(f)
 if args.minimize_pred_err is not None:
-    WorkerCls = ac.MinimizeJointAgentWorker
+    RewardCls = ac.MinimizeJointAgentWorker
     reward_params = {"model_loss_converges_to": args.minimize_pred_err}
 elif args.maximize_pred_err is not None:
-    WorkerCls = ac.MaximizeJointAgentWorker
+    RewardCls = ac.MaximizeJointAgentWorker
     reward_params = {"model_loss_converges_to": args.maximize_pred_err}
 elif args.target_pred_err is not None:
-    WorkerCls = ac.TargetErrorJointAgentWorker
+    RewardCls = ac.TargetErrorJointAgentWorker
     reward_params = {"target_prediction_error": args.target_pred_err}
 elif args.range_pred_err is not None:
-    WorkerCls = ac.RangeErrorJointAgentWorker
+    RewardCls = ac.RangeErrorJointAgentWorker
     reward_params = {"range_mini": args.range_pred_err[0], "range_maxi": args.range_pred_err[1]}
 else:
     WorkerCls = ac.MinimizeJointAgentWorker
     reward_params = {"model_loss_converges_to": 0.043}
+
+ModelTypeCls = ac.SeparateJointAgentWorker if args.separate else ac.JointJointAgentWorker
+WorkerCls = type('WorkerCls', (ModelTypeCls, RewardCls), {})
 
 args_worker = (args.discount_factor, args.sequence_length, reward_params)
 
@@ -172,7 +181,7 @@ with ac.Experiment(
     if args.continuous:
         ### continuous learning
         done = 0
-        save_every = 2000
+        save_every = 10000
         i = 0
         while done < args.continuous:
             experiment.asynchronously_run_both(save_every, "continuous")

@@ -263,7 +263,7 @@ class Worker:
         rewards, model_losses = self.sess.run([self.rewards, self.model_losses], feed_dict=feed_dict)
         feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards, model_losses=model_losses)
         train_op = self.rl_train_op if train_actor else self.critic_train_op
-        fetches = [self.actor_loss, self.critic_loss, self.global_rl_step, train_op, self.rl_summary]
+        fetches = [self.actor_loss, self.critic_loss, self.global_rl_step, train_op, self.rl_summary_stagewise]
         aloss, closs, global_rl_step, _, rl_summary = self.sess.run(fetches, feed_dict=feed_dict)
         self.summary_writer.add_summary(rl_summary, global_step=global_rl_step)
         if global_rl_step % 100 <= self._n_workers:
@@ -284,13 +284,14 @@ class Worker:
 
     def update_all(self, model_states, rl_states, actions, train_actor=True):
         feed_dict = self.to_model_feed_dict(states=model_states, targets=True)
-        fetches = [self.rewards, self.model_losses, self.model_loss, self.model_train_op]
-        rewards, model_losses, mloss, _ = self.sess.run(fetches, feed_dict=feed_dict)
+        fetches = [self.rewards, self.model_losses, self.model_loss, self.model_train_op, self.model_summary, self.global_both_step_inc]
+        rewards, model_losses, mloss, _, model_summary, global_both_step = self.sess.run(fetches, feed_dict=feed_dict)
+        self.summary_writer.add_summary(model_summary, global_step=global_both_step)
         feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards, model_losses=model_losses)
         train_op = self.rl_train_op if train_actor else self.critic_train_op
-        fetches = [self.actor_loss, self.critic_loss, self.global_both_step_inc, train_op, self.both_summary]
-        aloss, closs, global_both_step, _, both_summary = self.sess.run(fetches, feed_dict=feed_dict)
-        self.summary_writer.add_summary(both_summary, global_step=global_both_step)
+        fetches = [self.actor_loss, self.critic_loss, self.global_both_step_inc, train_op, self.rl_summary]
+        aloss, closs, global_both_step, _, rl_summary = self.sess.run(fetches, feed_dict=feed_dict)
+        self.summary_writer.add_summary(rl_summary, global_step=global_both_step)
         if global_both_step % 100 <= self._n_workers:
             self.summary_writer.flush()
         print("{} finished update number {} (model loss = {:.3f}  critic loss = {:.3f})".format(
@@ -298,7 +299,7 @@ class Worker:
         return global_both_step
 
 
-class JointAgentWorker(Worker):
+class BaseJointAgentWorker(Worker):
     def define_networks(self):
         self.define_net_dims()
         with tf.device(self.device):
@@ -306,28 +307,6 @@ class JointAgentWorker(Worker):
             self.define_model()
             # define reinforcement learning
             self.define_reinforcement_learning()
-
-    def define_model(self):
-        net_dim = self.model_net_dim
-        self.model_inputs = tf.placeholder(shape=[None, net_dim[0]], dtype=tf.float32, name="model_inputs")
-        self.model_targets = tf.placeholder(shape=[None, net_dim[-1]], dtype=tf.float32, name="model_targets")
-        prev_layer = self.model_inputs
-        with tf.variable_scope("model"):
-            for i, d in enumerate(net_dim[1:]):
-                activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
-                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
-        self.model_outputs = prev_layer
-        self.model_losses = tf.reduce_mean((self.model_outputs - self.model_targets) ** 2, axis=-1)
-        self.model_loss = tf.reduce_mean(self.model_losses, name="loss")
-        self.define_reward(**self.reward_params)
-        self.global_model_step = tf.Variable(0, dtype=tf.int32)
-        # optimizer / summary
-        self.model_optimizer = tf.train.AdamOptimizer(1e-3)
-        self.model_train_op = self.model_optimizer.minimize(self.model_loss, global_step=self.global_model_step)
-        self.model_loss_at_model_time_summary = \
-            tf.summary.scalar(self.summary_prefix + "/model_loss_at_model_time", self.model_loss)
-        self.model_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_model_time", tf.reduce_mean(self.rewards))
-        self.model_summary = tf.summary.merge([self.model_loss_at_model_time_summary, self.model_reward_summary])
 
     def define_reinforcement_learning(self):
         net_dim = self.rl_shared_net_dim + self.actor_remaining_net_dim
@@ -376,22 +355,33 @@ class JointAgentWorker(Worker):
         self.critic_train_op = self.critic_optimizer.minimize(self.critic_loss, global_step=self.global_rl_step)
         self.rl_optimizer = tf.train.AdamOptimizer(5e-5)
         self.rl_train_op = self.rl_optimizer.minimize(0.00001 * self.actor_loss + self.critic_loss, global_step=self.global_rl_step)
+        # per joint summaries:
+        names = ["arm1_arm2_left", "arm1_arm2_right", "ground_arm1_left", "ground_arm1_right"]
+        mean_summaries, std_summaries = [], []
+        for i, name in zip(range(4), names):
+            mean_summary = tf.summary.scalar("joints/{}_mean".format(name), self.mu[0, i])
+            mean_summaries.append(mean_summary)
+            std_summary = tf.summary.scalar("joints/{}_std".format(name), self.sigma[0, i])
+            std_summaries.append(std_summary)
+        per_joint_summaries = mean_summaries + std_summaries
         self.actor_loss_summary = tf.summary.scalar(self.summary_prefix + "/actor_loss", self.actor_loss)
         self.actor_stddev_sumary = tf.summary.scalar(self.summary_prefix + "/actor_stddev", tf.reduce_mean(self.sigma))
         self.critic_loss_summary = tf.summary.scalar(self.summary_prefix + "/critic_loss", self.critic_loss)
+        self.rl_summary = tf.summary.merge([
+            self.actor_loss_summary,
+            self.critic_loss_summary,
+            self.actor_stddev_sumary] + per_joint_summaries)
         self.rl_model_losses = tf.placeholder(shape=[None], dtype=tf.float32, name="rl_model_losses")
+        self.rl_rewards = tf.placeholder(shape=[None], dtype=tf.float32, name="rl_rewards")
         self.model_loss_at_rl_time_summary = \
             tf.summary.scalar(self.summary_prefix + "/model_loss_at_rl_time", tf.reduce_mean(self.rl_model_losses))
-        self.rl_rewards = tf.placeholder(shape=[None], dtype=tf.float32, name="rl_rewards")
         self.rl_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_rl_time", tf.reduce_mean(self.rl_rewards))
-        self.rl_summary = tf.summary.merge([self.model_loss_at_rl_time_summary, self.actor_loss_summary,
-                                            self.critic_loss_summary, self.rl_reward_summary, self.actor_stddev_sumary])
-
-        self.model_loss_summary = \
-            tf.summary.scalar(self.summary_prefix + "/model_loss", tf.reduce_mean(self.rl_model_losses))
-        self.reward_summary = tf.summary.scalar(self.summary_prefix + "/reward", tf.reduce_mean(self.rl_rewards))
-        self.both_summary = tf.summary.merge([self.model_loss_summary, self.actor_loss_summary,
-                                            self.critic_loss_summary, self.reward_summary, self.actor_stddev_sumary])
+        self.rl_summary_stagewise = tf.summary.merge([
+            self.model_loss_at_rl_time_summary,
+            self.actor_loss_summary,
+            self.critic_loss_summary,
+            self.rl_reward_summary,
+            self.actor_stddev_sumary] + per_joint_summaries)
 
     def get_model_state(self):
         return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
@@ -421,43 +411,212 @@ class JointAgentWorker(Worker):
     def to_model_feed_dict(self, states, targets=False):
         feed_dict = {}
         np_states = np.array(states)
-        new_shape_all = (-1, np.prod(np_states.shape[1:]))
-        new_shape_target = (-1, np.prod(np_states[:, 0].shape[1:]))
         if targets:
-            feed_dict[self.model_inputs] = np.reshape(np_states[:-1], new_shape_all)
-            feed_dict[self.model_targets] = np.reshape(np_states[1:, 0], new_shape_target)
+            feed_dict[self.model_inputs] = np_states[:-1]
+            feed_dict[self.model_targets] = np_states[1:, 0]
         else:
-            feed_dict[self.model_inputs] = np.reshape(np_states, new_shape_all)
+            feed_dict[self.model_inputs] = np_states
         return feed_dict
 
+
+# class JointJointAgentWorker(BaseJointAgentWorker):
+#     def define_model(self):
+#         net_dim = self.model_net_dim
+#         self.model_inputs = tf.placeholder(shape=[None, net_dim[0]], dtype=tf.float32, name="model_inputs")
+#         self.model_targets = tf.placeholder(shape=[None, net_dim[-1]], dtype=tf.float32, name="model_targets")
+#         prev_layer = self.model_inputs
+#         with tf.variable_scope("model"):
+#             for i, d in enumerate(net_dim[1:]):
+#                 activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
+#                 prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
+#         self.model_outputs = prev_layer
+#         self.model_losses = tf.reduce_mean((self.model_outputs - self.model_targets) ** 2, axis=-1)
+#         self.model_loss = tf.reduce_mean(self.model_losses, name="loss")
+#         self.define_reward(**self.reward_params)
+#         self.global_model_step = tf.Variable(0, dtype=tf.int32)
+#         # optimizer / summary
+#         self.model_optimizer = tf.train.AdamOptimizer(1e-3)
+#         self.model_train_op = self.model_optimizer.minimize(self.model_loss, global_step=self.global_model_step)
+#         self.model_loss_at_model_time_summary = \
+#             tf.summary.scalar(self.summary_prefix + "/model_loss_at_model_time", self.model_loss)
+#         self.model_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_model_time", tf.reduce_mean(self.rewards))
+#         self.model_summary = tf.summary.merge([self.model_loss_at_model_time_summary, self.model_reward_summary])
+#
+#     def to_model_feed_dict(self, states, targets=False):
+#         feed_dict = {}
+#         np_states = np.array(states)
+#         new_shape_all = (-1, np.prod(np_states.shape[1:]))
+#         new_shape_target = (-1, np.prod(np_states[:, 0].shape[1:]))
+#         if targets:
+#             feed_dict[self.model_inputs] = np.reshape(np_states[:-1], new_shape_all)
+#             feed_dict[self.model_targets] = np.reshape(np_states[1:, 0], new_shape_target)
+#         else:
+#             feed_dict[self.model_inputs] = np.reshape(np_states, new_shape_all)
+#         return feed_dict
+#
+#     def define_net_dims(self):
+#         dummy_state = np.array(self.get_model_state())
+#         inp_dim = dummy_state.flatten().shape[0]
+#         model_out_dim = dummy_state[0].flatten().shape[0]
+#         self.model_net_dim = [inp_dim, 600, 600, 600, model_out_dim]
+#         self.rl_shared_net_dim = [inp_dim, 600]
+#         self.actor_remaining_net_dim = [4]
+#         self.critic_remaining_net_dim = [1]
+
+
+class JointJointAgentWorker(BaseJointAgentWorker):
+    def define_model(self):
+        net_dim = self.model_net_dim
+        self.model_inputs = tf.placeholder(shape=[None, 3, 4, self.n_discrete], dtype=tf.float32, name="model_inputs")
+        self.model_targets = tf.placeholder(shape=[None, 4, self.n_discrete], dtype=tf.float32, name="model_targets")
+        input_positions = self.model_inputs[:, 0, :, :]
+        flat_model_inputs = tf.reshape(self.model_inputs, (-1, 3 * 4 * self.n_discrete))
+        flat_model_targets = tf.reshape(self.model_targets, (-1, 4 * self.n_discrete))
+        prev_layer = flat_model_inputs
+        with tf.variable_scope("model"):
+            for i, d in enumerate(net_dim[1:]):
+                activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
+        self.model_outputs = prev_layer
+        self.model_losses = tf.reduce_mean((self.model_outputs - flat_model_targets) ** 2, axis=-1)
+        self.model_loss = tf.reduce_mean(self.model_losses, name="loss")
+        self.model_chance_loss = tf.reduce_mean((self.model_inputs[:, 0, :, :] - self.model_targets) ** 2)
+        self.define_reward(**self.reward_params)
+        self.global_model_step = tf.Variable(0, dtype=tf.int32)
+        # optimizer / summary
+        self.model_optimizer = tf.train.AdamOptimizer(1e-3)
+        self.model_train_op = self.model_optimizer.minimize(self.model_loss, global_step=self.global_model_step)
+        self.model_loss_at_model_time_summary = \
+            tf.summary.scalar(self.summary_prefix + "/model_loss_at_model_time", self.model_loss)
+        self.model_chance_loss_summary = tf.summary.scalar(self.summary_prefix + "/model_chance_loss", self.model_chance_loss)
+        self.better_than_chance_summary = tf.summary.scalar(self.summary_prefix + "/better_than_chance", self.model_chance_loss - self.model_loss)
+        self.model_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_model_time", tf.reduce_mean(self.rewards))
+        self.model_summary = tf.summary.merge([
+            self.model_loss_at_model_time_summary,
+            self.model_reward_summary,
+            self.better_than_chance_summary,
+            self.model_chance_loss_summary])
+
     def define_net_dims(self):
-        dummy_state = np.array(self.get_model_state())
-        inp_dim = dummy_state.flatten().shape[0]
-        model_out_dim = dummy_state[0].flatten().shape[0]
-        self.model_net_dim = [inp_dim, 600, 600, 600, model_out_dim]
-        self.rl_shared_net_dim = [inp_dim, 600]
+        self.n_discrete = self.env._n_discrete
+        self.model_net_dim = [self.n_discrete * 4 * 3, 600, 600, 600, self.n_discrete * 4]
+        self.rl_shared_net_dim = [self.n_discrete * 4 * 3, 600]
         self.actor_remaining_net_dim = [4]
         self.critic_remaining_net_dim = [1]
 
 
-class MinimizeJointAgentWorker(JointAgentWorker):
+class SeparateJointAgentWorker(BaseJointAgentWorker):
+    def define_model(self):
+        net_dim = self.model_net_dim
+        self.model_inputs = tf.placeholder(shape=[None, 3, 4, self.n_discrete], dtype=tf.float32, name="model_inputs")
+        self.model_targets = tf.placeholder(shape=[None, 4, self.n_discrete], dtype=tf.float32, name="model_targets")
+        splited_model_inputs = [tf.reshape(x, (-1, 3 * self.n_discrete)) for x in tf.unstack(self.model_inputs, 4, axis=2)]
+        splited_model_targets = tf.unstack(self.model_targets, 4, axis=1)
+        splited_model_outputs = []
+        with tf.variable_scope("model"):
+            for joint_id, inp in enumerate(splited_model_inputs):
+                prev_layer = inp
+                for i, d in enumerate(net_dim[1:]):
+                    activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
+                    prev_layer = tl.fully_connected(prev_layer, d, scope="joint{}_layer{}".format(joint_id, i), activation_fn=activation_fn)
+                splited_model_outputs.append(prev_layer)
+        self.model_outputs = tf.stack(splited_model_outputs, axis=1)
+        self.model_losses = tf.reduce_mean((self.model_outputs - self.model_targets) ** 2, axis=[-2, -1])
+        self.model_loss = tf.reduce_mean(self.model_losses, name="loss")
+        self.model_chance_loss = tf.reduce_mean((self.model_inputs[:, 0, :, :] - self.model_targets) ** 2)
+        self.define_reward(**self.reward_params)
+        self.global_model_step = tf.Variable(0, dtype=tf.int32)
+        # optimizer / summary
+        self.model_optimizer = tf.train.AdamOptimizer(1e-3)
+        self.model_train_op = self.model_optimizer.minimize(self.model_loss, global_step=self.global_model_step)
+        self.model_loss_at_model_time_summary = \
+            tf.summary.scalar(self.summary_prefix + "/model_loss_at_model_time", self.model_loss)
+        self.model_chance_loss_summary = tf.summary.scalar(self.summary_prefix + "/model_chance_loss", self.model_chance_loss)
+        self.better_than_chance_summary = tf.summary.scalar(self.summary_prefix + "/better_than_chance", self.model_chance_loss - self.model_loss)
+        self.model_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_model_time", tf.reduce_mean(self.rewards))
+        self.model_summary = tf.summary.merge([
+            self.model_loss_at_model_time_summary,
+            self.model_reward_summary,
+            self.better_than_chance_summary,
+            self.model_chance_loss_summary])
+
+    def define_net_dims(self):
+        self.n_discrete = self.env._n_discrete
+        self.model_net_dim = [self.n_discrete * 3, 600, 600, 600, self.n_discrete]
+        self.rl_shared_net_dim = [self.n_discrete * 4 * 3, 600]
+        self.actor_remaining_net_dim = [4]
+        self.critic_remaining_net_dim = [1]
+
+
+# class SeparateJointAgentWorker(BaseJointAgentWorker):
+#     def define_model(self):
+#         net_dim = self.model_net_dim
+#         self.model_inputs = tf.placeholder(shape=[None, 4, net_dim[0]], dtype=tf.float32, name="model_inputs")
+#         self.model_targets = tf.placeholder(shape=[None, 4, net_dim[-1]], dtype=tf.float32, name="model_targets")
+#         splited_model_inputs = tf.unstack(self.model_inputs, 4, axis=1)
+#         splited_model_targets = tf.unstack(self.model_targets, 4, axis=1)
+#         splited_model_outputs = []
+#         with tf.variable_scope("model"):
+#             for joint_id, inp in enumerate(splited_model_inputs):
+#                 prev_layer = inp
+#                 for i, d in enumerate(net_dim[1:]):
+#                     activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
+#                     prev_layer = tl.fully_connected(prev_layer, d, scope="joint{}_layer{}".format(joint_id, i), activation_fn=activation_fn)
+#                 splited_model_outputs.append(prev_layer)
+#         self.model_outputs = tf.stack(splited_model_outputs, axis=1)
+#         self.model_losses = tf.reduce_mean((self.model_outputs - self.model_targets) ** 2, axis=[-2, -1])
+#         self.model_loss = tf.reduce_mean(self.model_losses, name="loss")
+#         self.define_reward(**self.reward_params)
+#         self.global_model_step = tf.Variable(0, dtype=tf.int32)
+#         # optimizer / summary
+#         self.model_optimizer = tf.train.AdamOptimizer(1e-3)
+#         self.model_train_op = self.model_optimizer.minimize(self.model_loss, global_step=self.global_model_step)
+#         self.model_loss_at_model_time_summary = \
+#             tf.summary.scalar(self.summary_prefix + "/model_loss_at_model_time", self.model_loss)
+#         self.model_reward_summary = tf.summary.scalar(self.summary_prefix + "/reward_at_model_time", tf.reduce_mean(self.rewards))
+#         self.model_summary = tf.summary.merge([self.model_loss_at_model_time_summary, self.model_reward_summary])
+#
+#     def to_model_feed_dict(self, states, targets=False):
+#         feed_dict = {}
+#         np_states = np.array(states).swapaxes(1, 2)
+#         batch_size = np_states.shape[0]
+#         np_inp_states = np_states.reshape((batch_size, 4, -1))
+#         if targets:
+#             feed_dict[self.model_inputs] = np_inp_states[:-1]
+#             feed_dict[self.model_targets] = np_states[1:, :, 0, :]
+#         else:
+#             feed_dict[self.model_inputs] = np_inp_states
+#         return feed_dict
+#
+#     def define_net_dims(self):
+#         dummy_state = np.array(self.get_model_state())
+#         inp_dim = dummy_state.shape[0] * dummy_state.shape[2]
+#         model_out_dim = dummy_state.shape[2]
+#         rl_inp_dim = np.prod(dummy_state.shape)
+#         self.model_net_dim = [inp_dim, 600, 600, 600, model_out_dim]
+#         self.rl_shared_net_dim = [rl_inp_dim, 600]
+#         self.actor_remaining_net_dim = [4]
+#         self.critic_remaining_net_dim = [1]
+
+
+class MinimizeJointAgentWorker(BaseJointAgentWorker):
     def define_reward(self, model_loss_converges_to):
         reward_scale = (1 - self.discount_factor) / model_loss_converges_to
         self.rewards = - reward_scale * self.model_losses
 
 
-class MaximizeJointAgentWorker(JointAgentWorker):
+class MaximizeJointAgentWorker(BaseJointAgentWorker):
     def define_reward(self, model_loss_converges_to):
         reward_scale = (1 - self.discount_factor) / model_loss_converges_to
         self.rewards = reward_scale * self.model_losses
 
 
-class TargetErrorJointAgentWorker(JointAgentWorker):
+class TargetErrorJointAgentWorker(BaseJointAgentWorker):
     def define_reward(self, target_prediction_error):
         self.rewards = -tf.abs(self.model_losses - target_prediction_error) * (1 - self.discount_factor) / 0.04
 
 
-class RangeErrorJointAgentWorker(JointAgentWorker):
+class RangeErrorJointAgentWorker(BaseJointAgentWorker):
     def define_reward(self, range_mini, range_maxi):
         mean = (range_maxi + range_mini) / 2
         dist = (range_maxi - range_mini) / 2

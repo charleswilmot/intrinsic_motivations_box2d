@@ -18,11 +18,11 @@ ylim = [-13.5, 13.5]
 json_model = "../models/two_arms.json"
 dpi = 1
 dt = 1 / 150
-n_discrete = 32
+n_discrete = 10
 env_step_length = 45
 
 
 args_env = (json_model, skin_order, skin_resolution, xlim, ylim, dpi, env_step_length, dt, n_discrete)
 
-with open("../environments/two_arms_45.pkl", "wb") as f:
+with open("../environments/two_arms_45_ndiscrete_10.pkl", "wb") as f:
     pickle.dump(args_env, f)
