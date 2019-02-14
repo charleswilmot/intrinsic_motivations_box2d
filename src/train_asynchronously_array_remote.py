@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 #SBATCH --partition sleuths
-#SBATCH --cpus-per-task 32
-#SBATCH --mem=32000
+#SBATCH --cpus-per-task 16
+#SBATCH --mem=16000
 #SBATCH --output=/dev/null
 
 
 import os
 import re
+import time
 
 
 array_id = int(os.environ["SLURM_ARRAY_TASK_ID"])
-array_path = "../experiments/array_df_085_continous_vs_stages/"
+array_path = "../experiments/array_df_095_continous_vs_stages_vs_separate/"
 slurm_log_path = "{}/log_array_id_{}.log".format(array_path, array_id)
 
 
@@ -72,31 +73,39 @@ def array_wrt_training_type():
     commands, paths = [], []
     for continuous in [True, False]:
         format_continuous = "continuous" if continuous else "stages"
-        for reward_type, reward_param in [("--minimize-pred-err", [0.042]),
-                                          ("--maximize-pred-err", [0.042]),
-                                          ("--target-pred-err", [0.03]),
-                                          ("--range-pred-err", [0.01, 0.03])]:
-            path = array_path + "/{}_{}_{}".format(
-                format_reward_type(reward_type),
-                format_reward_params(*reward_param),
-                format_continuous)
-            args_dict = {}
-            args_dict[reward_type] = reward_param
-            args_dict["-df"] = 0.85
-            args_dict["-nw"] = 16
-            args_dict["-np"] = 2
-            args_dict["-s"] = 4
-            if continuous:
-                args_dict["--continuous"] = 12000
-            commands.append(make_command(path, args_dict))
-            paths.append(path)
+        for separate in [True, False]:
+            format_separate = "separate" if separate else "joint"
+            for reward_type, reward_param in [("--minimize-pred-err", [0.042]),
+                                              ("--maximize-pred-err", [0.042]),
+                                              ("--target-pred-err", [0.01]),
+                                              ("--target-pred-err", [0.03]),
+                                              ("--target-pred-err", [0.05]),
+                                              ("--range-pred-err", [0.01, 0.03])]:
+                path = array_path + "/{}_{}_{}_{}".format(
+                    format_reward_type(reward_type),
+                    format_reward_params(*reward_param),
+                    format_continuous,
+                    format_separate)
+                args_dict = {}
+                args_dict[reward_type] = reward_param
+                args_dict["-df"] = 0.95
+                args_dict["-nw"] = 16
+                args_dict["-np"] = 2
+                args_dict["-s"] = 4
+                if separate:
+                    args_dict["--separate"] = ""
+                if continuous:
+                    args_dict["--continuous"] = 12000
+                commands.append(make_command(path, args_dict))
+                paths.append(path)
     return commands, paths
 
 
 commands, paths = array_wrt_training_type()
 if array_id < len(commands):
     cmd = commands[array_id]
-    experiment_path = commands[array_id]
+    experiment_path = paths[array_id]
     print("array ID = {}\t\t{}".format(array_id, cmd))
+    # time.sleep(2 * (array_id % 30))
     os.system(cmd)
-    os.rename(slurm_log_path, experiment_path)
+    os.rename(slurm_log_path, experiment_path + "/out.txt")
