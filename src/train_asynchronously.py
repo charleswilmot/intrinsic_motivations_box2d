@@ -181,7 +181,7 @@ with ac.Experiment(
     if args.continuous:
         ### continuous learning
         done = 0
-        save_every = 10000
+        save_every = 3000
         i = 0
         while done < args.continuous:
             experiment.asynchronously_run_both(save_every, "continuous")

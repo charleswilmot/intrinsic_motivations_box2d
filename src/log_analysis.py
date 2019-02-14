@@ -65,13 +65,16 @@ def smoothen(data, smooth_param):
     x = np.arange(mini, maxi)
     length = maxi - mini
 
-    def get_weights(data, index):
-        return np.exp(- (data[0] - index - mini) ** 2 / smooth_param ** 2)
+    def get_weights(X, index):
+        return np.exp(- (X - index - mini) ** 2 / smooth_param ** 2)
 
     mean = np.zeros(length)
     std = np.zeros(length)
     for i in range(length):
-        m, s = weighted_stats(data[1], get_weights(data, i))
+        where = np.where(np.logical_and(data[0] < i + mini + 2 * smooth_param, i + mini - 2 * smooth_param < data[0]))
+        X = data[0][where]
+        Y = data[1][where]
+        m, s = weighted_stats(Y, get_weights(X, i))
         mean[i] = m
         std[i] = s
     return x, mean, std
@@ -338,7 +341,7 @@ def group_parameters_by(parameters, key):
 
 def generate_all_plots(data, regenerate=False):
     print("Generating experiment plots:")
-    fig = plt.figure(figsize=(16, 4), dpi=200)
+    fig = plt.figure(figsize=(20, 2), dpi=200)
     fig.subplots_adjust(hspace=0.8, wspace=0.8)
     for i, path in enumerate(sorted(data)):
         print("{} / {}\t\t{}".format(i, len(data), path))
@@ -360,10 +363,11 @@ def generate_experiment_plots(fig, path, data, regenerate=False):
 def generate_sub_experiment_plot(fig, filepath, data, regenerate=False, smooth_param=50):
     if not os.path.exists(filepath):
         for i, key in enumerate(sorted(data)):
+            print("\t\t\t{}".format(key))
             smooth_data = smoothen(data[key], smooth_param)
-            ax = fig.add_subplot(2, 4, i + 1)
+            ax = fig.add_subplot(1, 9, i + 1)
             plot_stats(ax, *smooth_data)
-            ax.set_title(key.replace("_", " "))
+            ax.set_title(key.replace("_", " "), fontsize=10)
         fig.savefig(filepath, bbox_inches='tight')
         fig.clear()
 
@@ -390,9 +394,57 @@ def generate_all_experiment_tex_files(data):
         texfile.generate_latex(path + "/experiment.tex")
 
 
+def get_tab_data(data, params, by1, by2, func, name=""):
+    val_dict = {}
+    for k in params:
+        by1_val = by1(params[k])
+        by2_val = by2(params[k])
+        # print(by1_val, by2_val)
+        if by1_val not in val_dict:
+            val_dict[by1_val] = {}
+        if by2_val not in val_dict[by1_val]:
+            val_dict[by1_val][by2_val] = func(data[k])
+        else:
+            raise ValueError("error, demerden sie sich")
+    ret = []
+    ret.append([name] + [str(x) for x in list(sorted(val_dict))])
+    dummy_key = list(val_dict)[0]
+    for k in sorted(val_dict[dummy_key]):
+        ret.append([str(k)] + [str(x) for x in [val_dict[kk][k] for kk in sorted(val_dict)]])
+    return ret
+
+
+def by_reward(x):
+    if x["minimize_pred_err"]:
+        return "minimize {}".format(x["minimize_pred_err"])
+    if x["maximize_pred_err"]:
+        return "maximize {}".format(x["maximize_pred_err"])
+    if x["target_pred_err"]:
+        return "target {}".format(x["target_pred_err"])
+    if x["range_pred_err"]:
+        return "range {}".format(x["range_pred_err"])
+
+
+def by_exp_type(x):
+    continuous = "continuous" if x["continuous"] else "stagewise"
+    separate = "separate" if x["separate"] else "joint"
+    return "{} {}".format(continuous, separate)
+
+
+def get_std(data):
+    s = 0
+    for j in ["arm1_arm2_left", "arm1_arm2_right", "ground_arm1_left", "ground_arm1_right"]:
+        s += np.mean(data["joints"][j + "_std"][1][-100:])
+    return "{:.4f}".format(s / 4)
+
+
 class ArraySummary(tex.Document):
     def __init__(self, title):
-        super().__init__()
+        super().__init__(geometry_options={
+            "tmargin": "1cm",
+            "lmargin": "1cm",
+            "rmargin": "1cm",
+            "bmargin": "2cm"})
         self.preamble.append(tex.Package('graphicx'))
         self.preamble.append(tex.Command('title', title))
         self.preamble.append(tex.Command('author', 'Charles Wilmot'))
@@ -406,7 +458,7 @@ class ArraySummary(tex.Document):
         self.append(tex.Command("input", tex.NoEscape(os.path.abspath(path + "experiment.tex"))))
 
     def add_tabular(self, array):
-        with doc.create(tex.Tabular('l|' + 'c' * (len(array[0]) - 1))) as table:
+        with self.create(tex.Tabular('l|' + 'c' * (len(array[0]) - 1))) as table:
             for i, line in enumerate(array):
                 table.add_row(line)
                 # table.add_row([str(x) for x in line])
@@ -418,11 +470,11 @@ class ArraySummary(tex.Document):
 
 
 # generate_latex("../experiments/array_no_entropy_reg", regenerate_plots=False)
-path_to_array = "../experiments/array_df_085_continous_vs_stages/"
-data = load_data(path_to_data_in=path_to_array + "data.pkl")
-# data = load_data(path_to_exps=path_to_array + "*/",
-#                  path_to_data_out=path_to_array + "data.pkl")
-generate_all_plots(data)
+path_to_array = "../experiments/array_df_095_continous_vs_stages_vs_separate/"
+# data = load_data(path_to_data_in=path_to_array + "data.pkl")
+data = load_data(path_to_exps=path_to_array + "*/",
+                 path_to_data_out=path_to_array + "data.pkl")
+generate_all_plots(data, regenerate=False)
 generate_all_experiment_tex_files(data)
 parameters = load_parameters(path_to_array + "*/")
 
@@ -441,15 +493,30 @@ def by_reward_type(d):
 parameters_by_reward_type = group_parameters_by(parameters, by_reward_type)
 
 
-arrsum = ArraySummary("Continuous vs Stage-wise")
+arrsum = ArraySummary("Continuous vs Stage-wise vs Separate")
+with arrsum.create(tex.Section("Overview")):
+    arrsum.add_tabular(get_tab_data(data, parameters, by_exp_type, by_reward, get_std, name="STD"))
 for reward_type in ["minimize", "maximize", "target", "range"]:
-    with arrsum.create(tex.Section(reward_type)):
-        groups = group_parameters_by(parameters_by_reward_type[reward_type], lambda x: "stages" if x["continuous"] is None else "continuous")
-        with arrsum.create(tex.Subsection("Stages")):
-            for p in groups["stages"]:
-                arrsum.add_experiment(p)
-        with arrsum.create(tex.Subsection("Continuous")):
-            for p in groups["continuous"]:
-                arrsum.add_experiment(p)
-    arrsum.clearpage()
+    grouped_by_reward_params = group_parameters_by(parameters_by_reward_type[reward_type], lambda x: tuple(x[reward_type + "_pred_err"]) if type(x[reward_type + "_pred_err"]) == list else x[reward_type + "_pred_err"])
+    for k in grouped_by_reward_params:
+        with arrsum.create(tex.Section(reward_type + str(k))):
+            groups = group_parameters_by(grouped_by_reward_params[k], lambda x: "stages" if x["continuous"] is None else "continuous")
+            with arrsum.create(tex.Subsection("Stages")):
+                sub_groups = group_parameters_by(groups["stages"], lambda x: "separate" if x["separate"] else "joint")
+                with arrsum.create(tex.Subsubsection("Separate")):
+                    for p in sub_groups["separate"]:
+                        arrsum.add_experiment(p)
+                with arrsum.create(tex.Subsubsection("Joint")):
+                    for p in sub_groups["joint"]:
+                        arrsum.add_experiment(p)
+            arrsum.clearpage()
+            with arrsum.create(tex.Subsection("Continuous")):
+                sub_groups = group_parameters_by(groups["continuous"], lambda x: "separate" if x["separate"] else "joint")
+                with arrsum.create(tex.Subsubsection("Separate")):
+                    for p in sub_groups["separate"]:
+                        arrsum.add_experiment(p)
+                with arrsum.create(tex.Subsubsection("Joint")):
+                    for p in sub_groups["joint"]:
+                        arrsum.add_experiment(p)
+            arrsum.clearpage()
 arrsum.generate_pdf(filepath=path_to_array + "new_impl", clean_tex=False)
