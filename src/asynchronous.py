@@ -318,7 +318,7 @@ class JointAgentWorker(Worker):
         # self.global_model_step
         # self.model_train_op
         # self.model_summary
-        # self.model_summary_at_rl_time   --> missing in current ipl, TODO
+        # self.model_summary_at_rl_time   --> missing in current ipl, TODO  --> useless ?
         # PLACEHOLDERS : ############
         # self.model_inputs
         # self.model_targets
@@ -339,12 +339,14 @@ class JointAgentWorker(Worker):
         self.model_outputs = tf.stack(splited_model_outputs, axis=1)
         self.model_losses = tf.reduce_mean((self.model_outputs - self.model_targets) ** 2, axis=[-2, -1])
         self.model_loss = tf.reduce_mean(self.model_losses, name="loss")
-        self.model_chance_loss = tf.reduce_mean((self.model_inputs[:, 0, :, :] - self.model_targets) ** 2)
         self.define_reward(**self.reward_params)
         self.global_model_step = tf.Variable(0, dtype=tf.int32)
-        # optimizer / summary
+        # optimizer
         self.model_optimizer = tf.train.AdamOptimizer(1e-3)
         self.model_train_op = self.model_optimizer.minimize(self.model_loss, global_step=self.global_model_step)
+        # summaries
+        sum_model_loss = tf.summary.scalar("/model/loss", self.model_losses[0])
+        self.model_summary = tf.summary.gather([sum_model_loss])
 
     def define_reinforcement_learning(self):
         #############################
