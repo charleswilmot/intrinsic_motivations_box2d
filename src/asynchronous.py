@@ -62,12 +62,9 @@ class Worker:
         self.device = tf.train.replica_device_setter(worker_device=self.name, cluster=cluster)
         self.env = env
         self.discount_factor = discount_factor
-        self.entropy_coef = 0.0  # 0.01
         self.sequence_length = sequence_length
         self.reward_params = reward_params
         self.pipe = pipe
-        self._prev_summary_prefix_rl = None
-        self._prev_summary_prefix_model = None
         self.define_networks()
         self.logdir = logdir
         # graph = tf.get_default_graph() if task_index == 0 else None
@@ -179,7 +176,7 @@ class Worker:
     def get_action(self):
         state = self.get_rl_state()
         feed_dict = self.to_rl_feed_dict(states=[state])
-        action = self.sess.run(self.sample_action, feed_dict=feed_dict)
+        action = self.sess.run(self.stochastic_action, feed_dict=feed_dict)
         return action[0]
 
     def run_n_rl_steps(self):
@@ -216,7 +213,7 @@ class Worker:
 
     # TODO put that function in the subclass
     def run_n_display_steps(self, win, sample=True):
-        action_return_fetches = [self.sample_action if sample else self.mu, self.critic_value]
+        action_return_fetches = [self.stochastic_action if sample else self.greedy_action, self.critic_value]
         predicted_positions_reward_fetches = [self.model_outputs, self.rewards]
         for _ in range(self.sequence_length):
             # get current vision
@@ -258,7 +255,7 @@ class Worker:
         rewards, model_losses = self.sess.run([self.rewards, self.model_losses], feed_dict=feed_dict)
         feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards, model_losses=model_losses)
         train_op = self.rl_train_op if train_actor else self.critic_train_op
-        fetches = [self.actor_loss, self.critic_loss, self.global_rl_step, train_op, self.rl_summary_stagewise]
+        fetches = [self.actor_loss, self.critic_loss, self.global_rl_step, train_op, self.rl_summary]
         aloss, closs, global_rl_step, _, rl_summary = self.sess.run(fetches, feed_dict=feed_dict)
         self.summary_writer.add_summary(rl_summary, global_step=global_rl_step)
         if global_rl_step % 100 <= self._n_workers:
@@ -279,12 +276,12 @@ class Worker:
 
     def update_all(self, model_states, rl_states, actions, train_actor=True):
         feed_dict = self.to_model_feed_dict(states=model_states, targets=True)
-        fetches = [self.rewards, self.model_losses, self.model_loss, self.model_train_op, self.model_summary, self.global_both_step_inc]
+        fetches = [self.rewards, self.model_losses, self.model_loss, self.model_train_op, self.model_summary, self.global_both_step]
         rewards, model_losses, mloss, _, model_summary, global_both_step = self.sess.run(fetches, feed_dict=feed_dict)
         self.summary_writer.add_summary(model_summary, global_step=global_both_step)
         feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards, model_losses=model_losses)
         train_op = self.rl_train_op if train_actor else self.critic_train_op
-        fetches = [self.actor_loss, self.critic_loss, self.global_both_step_inc, train_op, self.rl_summary]
+        fetches = [self.actor_loss, self.critic_loss, self.global_both_step, train_op, self.rl_summary]
         aloss, closs, global_both_step, _, rl_summary = self.sess.run(fetches, feed_dict=feed_dict)
         self.summary_writer.add_summary(rl_summary, global_step=global_both_step)
         if global_both_step % 100 <= self._n_workers:
@@ -294,7 +291,7 @@ class Worker:
         return global_both_step
 
 
-class BaseJointAgentWorker(Worker):
+class JointAgentWorker(Worker):
     def define_networks(self):
         self.define_net_dims()
         with tf.device(self.device):
@@ -303,100 +300,80 @@ class BaseJointAgentWorker(Worker):
             # define reinforcement learning
             self.define_reinforcement_learning()
 
-    def define_reinforcement_learning(self):
-        net_dim = self.rl_shared_net_dim + self.actor_remaining_net_dim
-        self.rl_inputs = tf.placeholder(shape=[None, net_dim[0]], dtype=tf.float32, name="actor_inputs")
-        self.return_targets_not_bootstraped = tf.placeholder(shape=[None], dtype=tf.float32, name="returns_target")
-        batch_size = tf.shape(self.rl_inputs)[0]
-        constant_gammas = tf.fill(dims=[batch_size], value=self.discount_factor)
-        increasing_discounted_gammas = tf.cumprod(constant_gammas, reverse=True)
-        prev_layer = self.rl_inputs
-        with tf.variable_scope("shared"):
-            for i, d in enumerate(self.rl_shared_net_dim[1:]):
-                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i))
-        fork_layer = prev_layer
-        with tf.variable_scope("private_to_critic"):
-            for i, d in enumerate(self.critic_remaining_net_dim):
-                activation_fn = tf.nn.relu if i < len(self.critic_remaining_net_dim) - 1 else None
-                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
-            self.critic_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
-        self.return_targets = self.return_targets_not_bootstraped + increasing_discounted_gammas * self.critic_value[-1]
-        self.critic_losses = (self.critic_value - self.return_targets) ** 2
-        self.critic_loss = tf.reduce_mean(self.critic_losses, name="loss")
-        self.actions = tf.placeholder(shape=[None, net_dim[-1]], dtype=tf.float32, name="actor_picked_actions")  # picked actions
-        self.actor_targets = self.return_targets - self.critic_value
-        targets = tf.expand_dims(self.actor_targets, -1)
-        prev_layer = fork_layer
-        with tf.variable_scope("private_to_actor"):
-            for i, d in enumerate(self.actor_remaining_net_dim[:-1]):
-                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i))
-            self.mu = tl.fully_connected(prev_layer, self.actor_remaining_net_dim[-1], activation_fn=None, scope="mean_actions")
-            self.log_sigma_2 = tl.fully_connected(prev_layer, self.actor_remaining_net_dim[-1], activation_fn=None, scope="log_variance_actions")
-        self.sigma_2 = tf.exp(self.log_sigma_2)
-        self.sigma = tf.exp(0.5 * self.log_sigma_2)
-        self.sample_action = tf.random_normal(shape=tf.shape(self.mu)) * self.sigma + self.mu
-        self.probs = 1 / (tf.sqrt(2 * pi * self.sigma_2)) * tf.exp(-(self.actions - self.mu) ** 2 / (2 * self.sigma_2))
-        self.log_probs = -0.5 * (log(2 * pi) + self.log_sigma_2 + (self.actions - self.mu) ** 2 / self.sigma_2)
-        self.entropy = 0.5 * (1 + log(2 * pi) + self.log_sigma_2)
-        self.entropy_mean = tf.reduce_mean(self.entropy, name="entropy_mean")
-        self.actor_losses = -self.log_probs * targets - self.entropy_coef * self.entropy
-        self.actor_loss = tf.reduce_sum(self.actor_losses, name="loss")
+    def define_net_dims(self):
+        self.n_discrete = self.env._n_discrete
+        self.model_net_dim = [self.n_discrete * 3, 600, 600, 600, self.n_discrete]
+        self.rl_shared_net_dim = [self.n_discrete * 4 * 3, 600]
+        self.actor_remaining_net_dim = [4]
+        self.critic_remaining_net_dim = [1]
+
+    def define_model(self):
+        #############################
+        # MUST DEFINE : #############
+        #############################
+        # self.model_outputs
+        # self.rewards
+        # self.model_loss
+        # self.model_losses
+        # self.global_model_step
+        # self.model_train_op
+        # self.model_summary
+        # self.model_summary_at_rl_time   --> missing in current ipl, TODO
+        # PLACEHOLDERS : ############
+        # self.model_inputs
+        # self.model_targets
+        #############################
+        net_dim = self.model_net_dim
+        self.model_inputs = tf.placeholder(shape=[None, 3, 4, self.n_discrete], dtype=tf.float32, name="model_inputs")
+        self.model_targets = tf.placeholder(shape=[None, 4, self.n_discrete], dtype=tf.float32, name="model_targets")
+        splited_model_inputs = [tf.reshape(x, (-1, 3 * self.n_discrete)) for x in tf.unstack(self.model_inputs, 4, axis=2)]
+        splited_model_targets = tf.unstack(self.model_targets, 4, axis=1)
+        splited_model_outputs = []
+        with tf.variable_scope("model"):
+            for joint_id, inp in enumerate(splited_model_inputs):
+                prev_layer = inp
+                for i, d in enumerate(net_dim[1:]):
+                    activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
+                    prev_layer = tl.fully_connected(prev_layer, d, scope="joint{}_layer{}".format(joint_id, i), activation_fn=activation_fn)
+                splited_model_outputs.append(prev_layer)
+        self.model_outputs = tf.stack(splited_model_outputs, axis=1)
+        self.model_losses = tf.reduce_mean((self.model_outputs - self.model_targets) ** 2, axis=[-2, -1])
+        self.model_loss = tf.reduce_mean(self.model_losses, name="loss")
+        self.model_chance_loss = tf.reduce_mean((self.model_inputs[:, 0, :, :] - self.model_targets) ** 2)
+        self.define_reward(**self.reward_params)
+        self.global_model_step = tf.Variable(0, dtype=tf.int32)
         # optimizer / summary
-        self.global_rl_step = tf.Variable(0, dtype=tf.int32)
-        self.global_both_step = tf.Variable(0, dtype=tf.int32)
-        self.global_both_step_inc = self.global_both_step.assign_add(1)
-        self.critic_optimizer = tf.train.AdamOptimizer(5e-5)
-        # self.critic_optimizer = tf.train.AdamOptimizer(1e-3)
-        self.critic_train_op = self.critic_optimizer.minimize(self.critic_loss, global_step=self.global_rl_step)
-        self.rl_optimizer = tf.train.AdamOptimizer(5e-5)
-        self.rl_train_op = self.rl_optimizer.minimize(0.00001 * self.actor_loss + self.critic_loss, global_step=self.global_rl_step)
-        # Used in summaries
-        self.rl_model_losses = tf.placeholder(shape=[None], dtype=tf.float32, name="rl_model_losses")
-        self.rl_rewards = tf.placeholder(shape=[None], dtype=tf.float32, name="rl_rewards")
-        # summaries
-        names = ["arm1_arm2_left", "arm1_arm2_right", "ground_arm1_left", "ground_arm1_right"]
-        mean_summaries, std_summaries = [], []
-        for i, name in zip(range(4), names):
-            mean_summary = tf.summary.scalar("joints/{}_mean".format(name), self.mu[0, i])
-            mean_summaries.append(mean_summary)
-            std_summary = tf.summary.scalar("joints/{}_std".format(name), self.sigma[0, i])
-            std_summaries.append(std_summary)
-        self.per_joint_summaries = mean_summaries + std_summaries
-        self.def_rl_summaries()
+        self.model_optimizer = tf.train.AdamOptimizer(1e-3)
+        self.model_train_op = self.model_optimizer.minimize(self.model_loss, global_step=self.global_model_step)
 
-    def def_rl_summaries(self, summary_prefix=""):
-        if summary_prefix != self._prev_summary_prefix_rl:
-            self._prev_summary_prefix_rl = summary_prefix
-            actor_loss_summary = tf.summary.scalar(summary_prefix + "/actor_loss", self.actor_loss)
-            actor_stddev_sumary = tf.summary.scalar(summary_prefix + "/actor_stddev", tf.reduce_mean(self.sigma))
-            critic_loss_summary = tf.summary.scalar(summary_prefix + "/critic_loss", self.critic_loss)
-            self.rl_summary = tf.summary.merge([
-                actor_loss_summary,
-                critic_loss_summary,
-                actor_stddev_sumary] + self.per_joint_summaries)
-            model_loss_at_rl_time_summary = \
-                tf.summary.scalar(summary_prefix + "/model_loss_at_rl_time", tf.reduce_mean(self.rl_model_losses))
-            rl_reward_summary = tf.summary.scalar(summary_prefix + "/reward_at_rl_time", tf.reduce_mean(self.rl_rewards))
-            self.rl_summary_stagewise = tf.summary.merge([
-                model_loss_at_rl_time_summary,
-                actor_loss_summary,
-                critic_loss_summary,
-                rl_reward_summary,
-                actor_stddev_sumary] + self.per_joint_summaries)
-
-    def def_model_summaries(self, summary_prefix=""):
-        if summary_prefix != self._prev_summary_prefix_model:
-            self._prev_summary_prefix_model = summary_prefix
-            model_loss_at_model_time_summary = \
-                tf.summary.scalar(summary_prefix + "/model_loss_at_model_time", self.model_loss)
-            model_chance_loss_summary = tf.summary.scalar(summary_prefix + "/model_chance_loss", self.model_chance_loss)
-            better_than_chance_summary = tf.summary.scalar(summary_prefix + "/better_than_chance", self.model_chance_loss - self.model_loss)
-            model_reward_summary = tf.summary.scalar(summary_prefix + "/reward_at_model_time", tf.reduce_mean(self.rewards))
-            self.model_summary = tf.summary.merge([
-                model_loss_at_model_time_summary,
-                model_reward_summary,
-                better_than_chance_summary,
-                model_chance_loss_summary])
+    def define_reinforcement_learning(self):
+        #############################
+        # MUST DEFINE : #############
+        #############################
+        # self.stochastic_action
+        # self.greedy_action
+        # self.critic_value
+        # self.critic_loss
+        # self.actor_loss
+        # self.rl_train_op
+        # self.critic_train_op
+        # self.global_rl_step
+        # self.global_both_step  --> must be automalicaly incremented when calling some train op...
+        # self.rl_summary
+        # PLACEHOLDERS : ############
+        # self.rl_inputs
+        # self.actions
+        # self.rl_rewards
+        # self.return_targets_not_bootstraped
+        # self.rl_model_losses
+        #############################
+        # self.rl_inputs = tf.placeholder(shape=[None, ???], dtype=tf.float32, name="actor_inputs")
+        # self.return_targets_not_bootstraped = tf.placeholder(shape=[None], dtype=tf.float32, name="returns_target")
+        # batch_size = tf.shape(self.rl_inputs)[0]
+        # constant_gammas = tf.fill(dims=[batch_size], value=self.discount_factor)
+        # increasing_discounted_gammas = tf.cumprod(constant_gammas, reverse=True)
+        # prev_layer = self.rl_inputs
+        pass
 
     def get_model_state(self):
         return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
@@ -434,90 +411,24 @@ class BaseJointAgentWorker(Worker):
         return feed_dict
 
 
-class JointJointAgentWorker(BaseJointAgentWorker):
-    def define_model(self):
-        net_dim = self.model_net_dim
-        self.model_inputs = tf.placeholder(shape=[None, 3, 4, self.n_discrete], dtype=tf.float32, name="model_inputs")
-        self.model_targets = tf.placeholder(shape=[None, 4, self.n_discrete], dtype=tf.float32, name="model_targets")
-        input_positions = self.model_inputs[:, 0, :, :]
-        flat_model_inputs = tf.reshape(self.model_inputs, (-1, 3 * 4 * self.n_discrete))
-        flat_model_targets = tf.reshape(self.model_targets, (-1, 4 * self.n_discrete))
-        prev_layer = flat_model_inputs
-        with tf.variable_scope("model"):
-            for i, d in enumerate(net_dim[1:]):
-                activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
-                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
-        self.model_outputs = prev_layer
-        self.model_losses = tf.reduce_mean((self.model_outputs - flat_model_targets) ** 2, axis=-1)
-        self.model_loss = tf.reduce_mean(self.model_losses, name="loss")
-        self.model_chance_loss = tf.reduce_mean((self.model_inputs[:, 0, :, :] - self.model_targets) ** 2)
-        self.define_reward(**self.reward_params)
-        self.global_model_step = tf.Variable(0, dtype=tf.int32)
-        # optimizer / summary
-        self.model_optimizer = tf.train.AdamOptimizer(1e-3)
-        self.model_train_op = self.model_optimizer.minimize(self.model_loss, global_step=self.global_model_step)
-        self.def_model_summaries()
-
-    def define_net_dims(self):
-        self.n_discrete = self.env._n_discrete
-        self.model_net_dim = [self.n_discrete * 4 * 3, 600, 600, 600, self.n_discrete * 4]
-        self.rl_shared_net_dim = [self.n_discrete * 4 * 3, 600]
-        self.actor_remaining_net_dim = [4]
-        self.critic_remaining_net_dim = [1]
-
-
-class SeparateJointAgentWorker(BaseJointAgentWorker):
-    def define_model(self):
-        net_dim = self.model_net_dim
-        self.model_inputs = tf.placeholder(shape=[None, 3, 4, self.n_discrete], dtype=tf.float32, name="model_inputs")
-        self.model_targets = tf.placeholder(shape=[None, 4, self.n_discrete], dtype=tf.float32, name="model_targets")
-        splited_model_inputs = [tf.reshape(x, (-1, 3 * self.n_discrete)) for x in tf.unstack(self.model_inputs, 4, axis=2)]
-        splited_model_targets = tf.unstack(self.model_targets, 4, axis=1)
-        splited_model_outputs = []
-        with tf.variable_scope("model"):
-            for joint_id, inp in enumerate(splited_model_inputs):
-                prev_layer = inp
-                for i, d in enumerate(net_dim[1:]):
-                    activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
-                    prev_layer = tl.fully_connected(prev_layer, d, scope="joint{}_layer{}".format(joint_id, i), activation_fn=activation_fn)
-                splited_model_outputs.append(prev_layer)
-        self.model_outputs = tf.stack(splited_model_outputs, axis=1)
-        self.model_losses = tf.reduce_mean((self.model_outputs - self.model_targets) ** 2, axis=[-2, -1])
-        self.model_loss = tf.reduce_mean(self.model_losses, name="loss")
-        self.model_chance_loss = tf.reduce_mean((self.model_inputs[:, 0, :, :] - self.model_targets) ** 2)
-        self.define_reward(**self.reward_params)
-        self.global_model_step = tf.Variable(0, dtype=tf.int32)
-        # optimizer / summary
-        self.model_optimizer = tf.train.AdamOptimizer(1e-3)
-        self.model_train_op = self.model_optimizer.minimize(self.model_loss, global_step=self.global_model_step)
-        self.def_model_summaries()
-
-    def define_net_dims(self):
-        self.n_discrete = self.env._n_discrete
-        self.model_net_dim = [self.n_discrete * 3, 600, 600, 600, self.n_discrete]
-        self.rl_shared_net_dim = [self.n_discrete * 4 * 3, 600]
-        self.actor_remaining_net_dim = [4]
-        self.critic_remaining_net_dim = [1]
-
-
-class MinimizeJointAgentWorker(BaseJointAgentWorker):
+class MinimizeJointAgentWorker(JointAgentWorker):
     def define_reward(self, model_loss_converges_to):
         reward_scale = (1 - self.discount_factor) / model_loss_converges_to
         self.rewards = - reward_scale * self.model_losses
 
 
-class MaximizeJointAgentWorker(BaseJointAgentWorker):
+class MaximizeJointAgentWorker(JointAgentWorker):
     def define_reward(self, model_loss_converges_to):
         reward_scale = (1 - self.discount_factor) / model_loss_converges_to
         self.rewards = reward_scale * self.model_losses
 
 
-class TargetErrorJointAgentWorker(BaseJointAgentWorker):
+class TargetErrorJointAgentWorker(JointAgentWorker):
     def define_reward(self, target_prediction_error):
         self.rewards = -tf.abs(self.model_losses - target_prediction_error) * (1 - self.discount_factor) / 0.04
 
 
-class RangeErrorJointAgentWorker(BaseJointAgentWorker):
+class RangeErrorJointAgentWorker(JointAgentWorker):
     def define_reward(self, range_mini, range_maxi):
         mean = (range_maxi + range_mini) / 2
         dist = (range_maxi - range_mini) / 2
@@ -664,222 +575,6 @@ class Experiment:
 
     def __exit__(self, type, value, traceback):
         self.close()
-
-
-# class Experiment:
-#     def __init__(self, n_parameter_servers, n_workers, WorkerCls, experiment_dir, args_env, args_worker, display_dpi=3):
-#         self.n_parameter_servers = n_parameter_servers
-#         self.n_workers = n_workers
-#         self.WorkerCls = WorkerCls
-#         self.cluster = get_cluster(n_parameter_servers, n_workers)
-#         self.parameter_servers_processes = []
-#         self.workers_processes = []
-#         self.workers_events = []
-#         self.experiment_dir = experiment_dir
-#         self.mktree()
-#         self.args_env, self.args_worker = args_env, list(args_worker)
-#         self.args_worker = [self.cluster, self.logdir] + self.args_worker
-#         self.args_env_display = list(args_env)
-#         self.args_env_display[5] = display_dpi
-#         self._define_tensorboard_process()
-#         self.display_process = None
-#
-#         # Define processes:
-#     def _define_tensorboard_process(self):
-#         self.tensorboard_process = multiprocessing.Process(target=self.tensorboard_func)
-#
-#     def _define_display_process(self, sample=True):
-#         self.display_event = multiprocessing.Event()
-#         self.display_process = multiprocessing.Process(target=self.worker_display_func, args=(sample,), daemon=True)
-#
-#     def _define_parameter_server_processes(self):
-#         for i in range(self.n_parameter_servers):
-#             p = multiprocessing.Process(target=self.parameter_server_func, args=(i,), daemon=True)
-#             self.parameter_servers_processes.append(p)
-#
-#     def _define_workers_model_processes(self, n_updates, summary_prefix):
-#         for i in range(self.n_workers):
-#             p = multiprocessing.Process(target=self.worker_model_func, args=(i, n_updates, summary_prefix), daemon=True)
-#             self.workers_processes.append(p)
-#             self.workers_events.append(multiprocessing.Event())
-#
-#     def _define_workers_rl_processes(self, n_updates, summary_prefix, train_actor=True):
-#         for i in range(self.n_workers):
-#             p = multiprocessing.Process(target=self.worker_rl_func, args=(i, n_updates, summary_prefix, train_actor), daemon=True)
-#             self.workers_processes.append(p)
-#             self.workers_events.append(multiprocessing.Event())
-#
-#     def _define_workers_both_processes(self, n_updates, summary_prefix, train_actor=True):
-#         for i in range(self.n_workers):
-#             p = multiprocessing.Process(target=self.worker_both_func, args=(i, n_updates, summary_prefix, train_actor), daemon=True)
-#             self.workers_processes.append(p)
-#             self.workers_events.append(multiprocessing.Event())
-#
-#     def _define_workers_save_processes(self, path):
-#         for i in range(self.n_workers):
-#             p = multiprocessing.Process(target=self.worker_save_func, args=(i, path), daemon=True)
-#             self.workers_processes.append(p)
-#             self.workers_events.append(multiprocessing.Event())
-#
-#     def _define_workers_restore_processes(self, path):
-#         for i in range(self.n_workers):
-#             p = multiprocessing.Process(target=self.worker_restore_func, args=(i, path), daemon=True)
-#             self.workers_processes.append(p)
-#             self.workers_events.append(multiprocessing.Event())
-#
-#     def worker_display_func(self, sample=True):
-#         env = environment.Environment(*self.args_env_display)
-#         worker = self.WorkerCls(self.n_workers - 1, self.display_event, env, *self.args_worker)
-#         worker.wait_for_variables_initialization()
-#         worker.run_display(sample)
-#
-#     def tensorboard_func(self):
-#         port = get_available_port()
-#         p1 = multiprocessing.Process(target=tensorboard_server_func, args=(self.logdir, port), daemon=True)
-#         p1.start()
-#         time.sleep(2)
-#         p2 = multiprocessing.Process(target=chromium_func, args=(port,), daemon=True)
-#         p2.start()
-#         p2.join()
-#         terminate_process_safe(p1)
-#
-#     def parameter_server_func(self, task_index):
-#         server = tf.train.Server(self.cluster, "ps", task_index)
-#         server.join()
-#
-#     def worker_model_func(self, task_index, n_updates, summary_prefix):
-#         env = environment.Environment(*self.args_env)
-#         worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker, summary_prefix=summary_prefix)
-#         worker.wait_for_variables_initialization()
-#         worker.run_model(n_updates)
-#
-#     def worker_rl_func(self, task_index, n_updates, summary_prefix, train_actor=True):
-#         env = environment.Environment(*self.args_env)
-#         worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker, summary_prefix=summary_prefix)
-#         worker.wait_for_variables_initialization()
-#         worker.run_reinforcement_learning(n_updates, train_actor)
-#
-#     def worker_both_func(self, task_index, n_updates, summary_prefix, train_actor=True):
-#         env = environment.Environment(*self.args_env)
-#         worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker, summary_prefix=summary_prefix)
-#         worker.wait_for_variables_initialization()
-#         worker.run_all(n_updates, train_actor)
-#
-#     def worker_save_func(self, task_index, path):
-#         env = environment.Environment(*self.args_env)
-#         worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker)
-#         worker.wait_for_variables_initialization()
-#         worker.save(path)
-#
-#     def worker_restore_func(self, task_index, path):
-#         env = environment.Environment(*self.args_env)
-#         worker = self.WorkerCls(task_index, self.workers_events[task_index], env, *self.args_worker)
-#         worker.wait_for_variables_initialization()
-#         worker.restore(path)
-#
-#     def __enter__(self):
-#         self.start_parameter_servers()
-#         return self
-#
-#     def __exit__(self, type, value, traceback):
-#         self.close()
-#
-#     def mktree(self):
-#         self.logdir = self.experiment_dir + "/log"
-#         self.checkpointsdir = self.experiment_dir + "/checkpoints"
-#         os.mkdir(self.experiment_dir)
-#         os.mkdir(self.logdir)
-#         os.mkdir(self.checkpointsdir)
-#
-#     def start_tensorboard(self):
-#         if not self.tensorboard_process.is_alive():
-#             self.tensorboard_process.start()
-#
-#     def close_tensorboard(self):
-#         if self.tensorboard_process.is_alive():
-#             terminate_process_safe(self.tensorboard_process)
-#
-#     def start_parameter_servers(self):
-#         self._define_parameter_server_processes()
-#         for p in self.parameter_servers_processes:
-#             if not p.is_alive():
-#                 p.start()
-#
-#     def close_parameter_servers(self):
-#         for p in self.parameter_servers_processes:
-#             if p.is_alive():
-#                 p.terminate()
-#         for p in self.parameter_servers_processes:
-#             while p.is_alive():
-#                 time.sleep(0.1)
-#
-#     def start_display_worker(self, sample=True):
-#         if self.display_process is None or not self.display_process.is_alive():
-#             self._define_display_process(sample)
-#             self.display_process.start()
-#
-#     def close_display_worker(self):
-#         if self.display_process is not None and self.display_process.is_alive():
-#             self.display_event.set()
-#             while self.display_process.is_alive():
-#                 time.sleep(0.1)
-#
-#     def asynchronously_run_model(self, n_updates, summary_prefix):
-#         self._define_workers_model_processes(n_updates, summary_prefix)
-#         self._start_workers_processes()
-#
-#     def asynchronously_run_reinforcement_learning(self, n_updates, summary_prefix, train_actor=True):
-#         self._define_workers_rl_processes(n_updates, summary_prefix, train_actor=train_actor)
-#         self._start_workers_processes()
-#
-#     def asynchronously_run_both(self, n_updates, summary_prefix, train_actor=True):
-#         self._define_workers_both_processes(n_updates, summary_prefix, train_actor=train_actor)
-#         self._start_workers_processes()
-#
-#     def save_model(self, name):
-#         # path = os.path.abspath(self.checkpointsdir + "/{}/".format(name))
-#         path = self.checkpointsdir + "/{}/".format(name)
-#         os.mkdir(path)
-#         self._define_workers_save_processes(path)
-#         self._start_workers_processes()
-#
-#     def restore_model(self, path):
-#         self._define_workers_restore_processes(path)
-#         self._start_workers_processes()
-#
-#     def _start_workers_processes(self):
-#         if self.display_process is not None and self.display_process.is_alive():
-#             procs = self.workers_processes[:-1]
-#             events = self.workers_events[:-1]
-#         else:
-#             procs = self.workers_processes
-#             events = self.workers_events
-#         blockrun(procs, events)
-#         self.workers_events = []
-#         self.workers_processes = []
-#
-#     def close(self):
-#         # self.close_tensorboard()
-#         self.close_display_worker()
-#         self.close_parameter_servers()
-
-
-# def blockrun(procs, events):
-#     for p in procs:
-#         p.start()
-#     for e in events:
-#         e.wait()
-#     for p in procs:
-#         p.terminate()
-#     for p in procs:
-#         while p.is_alive():
-#             time.sleep(0.1)
-
-
-# def terminate_process_safe(p):
-#     p.terminate()
-#     while p.is_alive():
-#         time.sleep(0.1)
 
 
 if __name__ == "__main__":

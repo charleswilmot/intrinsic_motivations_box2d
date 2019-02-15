@@ -133,13 +133,6 @@ parser.add_argument(
     default=None
 )
 
-parser.add_argument(
-    '--separate',
-    action='store_true',
-    help="Separate / joint model"
-)
-
-
 args = parser.parse_args()
 with open(args.environment_conf, "rb") as f:
     args_env = pickle.load(f)
@@ -156,11 +149,10 @@ elif args.range_pred_err is not None:
     RewardCls = ac.RangeErrorJointAgentWorker
     reward_params = {"range_mini": args.range_pred_err[0], "range_maxi": args.range_pred_err[1]}
 else:
-    WorkerCls = ac.MinimizeJointAgentWorker
+    RewardCls = ac.MinimizeJointAgentWorker
     reward_params = {"model_loss_converges_to": 0.043}
 
-ModelTypeCls = ac.SeparateJointAgentWorker if args.separate else ac.JointJointAgentWorker
-WorkerCls = type('WorkerCls', (ModelTypeCls, RewardCls), {})
+WorkerCls = type('WorkerCls', (ac.JointAgentWorker, RewardCls), {})
 
 args_worker = (args.discount_factor, args.sequence_length, reward_params)
 
