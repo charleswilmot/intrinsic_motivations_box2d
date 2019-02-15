@@ -156,8 +156,8 @@ elif args.range_pred_err is not None:
     RewardCls = ac.RangeErrorJointAgentWorker
     reward_params = {"range_mini": args.range_pred_err[0], "range_maxi": args.range_pred_err[1]}
 else:
-    WorkerCls = ac.MinimizeJointAgentWorker
-    reward_params = {"model_loss_converges_to": 0.043}
+    WorkerCls = ac.SquaredJointJointAgentWorker
+    reward_params = {"coef": 100}
 
 ModelTypeCls = ac.SeparateJointAgentWorker if args.separate else ac.JointJointAgentWorker
 WorkerCls = type('WorkerCls', (ModelTypeCls, RewardCls), {})

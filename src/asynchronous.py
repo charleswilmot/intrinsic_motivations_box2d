@@ -331,12 +331,13 @@ class BaseJointAgentWorker(Worker):
             for i, d in enumerate(self.actor_remaining_net_dim[:-1]):
                 prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i))
             self.mu = tl.fully_connected(prev_layer, self.actor_remaining_net_dim[-1], activation_fn=None, scope="mean_actions")
-            self.log_sigma_2 = tl.fully_connected(prev_layer, self.actor_remaining_net_dim[-1], activation_fn=None, scope="log_variance_actions")
+            # self.log_sigma_2 = tl.fully_connected(prev_layer, self.actor_remaining_net_dim[-1], activation_fn=None, scope="log_variance_actions")
+            self.log_sigma_2 = tf.ones_like(self.mu) * np.log(0.01) * tf.cond(tf.greater(tf.random_uniform(shape=(), minval=0, maxval=1), tf.constant(0.9)), lambda: tf.constant(1.0), lambda: tf.constant(1e2))
         self.sigma_2 = tf.exp(self.log_sigma_2)
         self.sigma = tf.exp(0.5 * self.log_sigma_2)
         self.sample_action = tf.random_normal(shape=tf.shape(self.mu)) * self.sigma + self.mu
         self.probs = 1 / (tf.sqrt(2 * pi * self.sigma_2)) * tf.exp(-(self.actions - self.mu) ** 2 / (2 * self.sigma_2))
-        self.log_probs = -0.5 * (log(2 * pi) + self.log_sigma_2 + (self.actions - self.mu) ** 2 / self.sigma_2)
+        self.log_probs = -0.5 * (log(2 * pi) + self.log_sigma_2 + (self.actions - self.mu) ** 2 / (self.sigma_2 + 1e-4))
         self.entropy = 0.5 * (1 + log(2 * pi) + self.log_sigma_2)
         self.entropy_mean = tf.reduce_mean(self.entropy, name="entropy_mean")
         self.actor_losses = -self.log_probs * targets - self.entropy_coef * self.entropy
@@ -348,20 +349,24 @@ class BaseJointAgentWorker(Worker):
         self.critic_optimizer = tf.train.AdamOptimizer(5e-5)
         # self.critic_optimizer = tf.train.AdamOptimizer(1e-3)
         self.critic_train_op = self.critic_optimizer.minimize(self.critic_loss, global_step=self.global_rl_step)
-        self.rl_optimizer = tf.train.AdamOptimizer(5e-5)
-        self.rl_train_op = self.rl_optimizer.minimize(0.00001 * self.actor_loss + self.critic_loss, global_step=self.global_rl_step)
+        # self.rl_optimizer = tf.train.AdamOptimizer(5e-5)
+        # self.rl_train_op = self.rl_optimizer.minimize(0.00001 * self.actor_loss + self.critic_loss, global_step=self.global_rl_step)
+        self.rl_optimizer = tf.train.AdamOptimizer(1e-3)
+        self.rl_train_op = self.rl_optimizer.minimize(0.0000001 * self.actor_loss + self.critic_loss, global_step=self.global_rl_step)
         # Used in summaries
         self.rl_model_losses = tf.placeholder(shape=[None], dtype=tf.float32, name="rl_model_losses")
         self.rl_rewards = tf.placeholder(shape=[None], dtype=tf.float32, name="rl_rewards")
         # summaries
         names = ["arm1_arm2_left", "arm1_arm2_right", "ground_arm1_left", "ground_arm1_right"]
-        mean_summaries, std_summaries = [], []
+        mean_summaries, std_summaries, prob_summaries = [], [], []
         for i, name in zip(range(4), names):
             mean_summary = tf.summary.scalar("joints/{}_mean".format(name), self.mu[0, i])
             mean_summaries.append(mean_summary)
             std_summary = tf.summary.scalar("joints/{}_std".format(name), self.sigma[0, i])
             std_summaries.append(std_summary)
-        self.per_joint_summaries = mean_summaries + std_summaries
+            prob_summary = tf.summary.scalar("joints/{}_prob".format(name), self.probs[0, i])
+            prob_summaries.append(prob_summary)
+        self.per_joint_summaries = mean_summaries + std_summaries + prob_summaries
         self.def_rl_summaries()
 
     def def_rl_summaries(self, summary_prefix=""):
@@ -464,6 +469,65 @@ class JointJointAgentWorker(BaseJointAgentWorker):
         self.rl_shared_net_dim = [self.n_discrete * 4 * 3, 600]
         self.actor_remaining_net_dim = [4]
         self.critic_remaining_net_dim = [1]
+
+
+class SquaredJointJointAgentWorker(BaseJointAgentWorker):
+    def define_model(self):
+        net_dim = self.model_net_dim
+        self.model_inputs = tf.placeholder(shape=[None, 3, 4, self.n_discrete], dtype=tf.float32, name="model_inputs")
+        self.model_targets = tf.placeholder(shape=[None, 4, self.n_discrete], dtype=tf.float32, name="model_targets")
+        input_positions = self.model_inputs[:, 0, :, :]
+        flat_model_inputs = tf.reshape(self.model_inputs, (-1, 3 * 4 * self.n_discrete))
+        flat_model_targets = tf.reshape(self.model_targets, (-1, 4 * self.n_discrete))
+        prev_layer = flat_model_inputs
+        with tf.variable_scope("model"):
+            for i, d in enumerate(net_dim[1:]):
+                activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
+        self.model_outputs = prev_layer
+        self.model_losses = tf.reduce_mean((self.model_outputs - flat_model_targets) ** 2, axis=-1)
+        self.model_loss = tf.reduce_mean(self.model_losses, name="loss")
+        self.model_chance_loss = tf.reduce_mean((self.model_inputs[:, 0, :, :] - self.model_targets) ** 2)
+        prev_layer = flat_model_inputs
+        with tf.variable_scope("model_squared"):
+            for i, d in enumerate([100, 1]):
+                activation_fn = tf.nn.relu if i < 1 else None
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
+        self.squared_loss = (self.model_losses - tf.squeeze(prev_layer)) ** 2
+        self.define_reward(**self.reward_params)
+        self.global_model_step = tf.Variable(0, dtype=tf.int32)
+        self.total_loss = self.model_loss + tf.reduce_mean(self.squared_loss)
+
+        # optimizer / summary
+        self.model_optimizer = tf.train.AdamOptimizer(1e-3)
+        self.model_train_op = self.model_optimizer.minimize(self.total_loss, global_step=self.global_model_step)
+        self.def_model_summaries()
+
+    def define_reward(self, coef=100):
+        self.rewards = self.squared_loss * coef * (1 - self.discount_factor)
+
+    def define_net_dims(self):
+        self.n_discrete = self.env._n_discrete
+        self.model_net_dim = [self.n_discrete * 4 * 3, 600, 600, 600, self.n_discrete * 4]
+        self.rl_shared_net_dim = [self.n_discrete * 4 * 3]
+        self.actor_remaining_net_dim = [600, 4]
+        self.critic_remaining_net_dim = [600, 1]
+
+    def def_model_summaries(self, summary_prefix=""):
+        if summary_prefix != self._prev_summary_prefix_model:
+            self._prev_summary_prefix_model = summary_prefix
+            squared_summary = tf.summary.scalar(summary_prefix + "/pred_of_pred_error_error", self.squared_loss[0])
+            model_loss_at_model_time_summary = \
+                tf.summary.scalar(summary_prefix + "/model_loss_at_model_time", self.model_losses[0])
+            model_chance_loss_summary = tf.summary.scalar(summary_prefix + "/model_chance_loss", self.model_chance_loss)
+            better_than_chance_summary = tf.summary.scalar(summary_prefix + "/better_than_chance", self.model_chance_loss - self.model_loss)
+            model_reward_summary = tf.summary.scalar(summary_prefix + "/reward_at_model_time", self.rewards[0])
+            self.model_summary = tf.summary.merge([
+                model_loss_at_model_time_summary,
+                model_reward_summary,
+                better_than_chance_summary,
+                model_chance_loss_summary,
+                squared_summary])
 
 
 class SeparateJointAgentWorker(BaseJointAgentWorker):
