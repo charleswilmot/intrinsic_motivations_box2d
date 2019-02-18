@@ -152,12 +152,10 @@ else:
     RewardCls = ac.MinimizeJointAgentWorker
     reward_params = {"model_loss_converges_to": 0.043}
 
-WorkerCls = type('WorkerCls', (ac.JointAgentWorker, RewardCls), {})
-
 args_worker = (args.discount_factor, args.sequence_length, reward_params)
 
 with ac.Experiment(
-        args.n_parameter_servers, args.n_workers, WorkerCls,
+        args.n_parameter_servers, args.n_workers, RewardCls,
         args.path, args_env, args_worker, display_dpi=3) as experiment:
     ### save command line
     with open(args.path + "/cmd.txt", "w") as f:

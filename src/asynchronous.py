@@ -127,8 +127,6 @@ class Worker:
         self.pipe.send("{} variables restored from {}".format(self.name, path))
 
     def run_reinforcement_learning(self, n_updates, summary_prefix, train_actor=True):
-        self.def_rl_summaries(summary_prefix)
-        self.def_model_summaries(summary_prefix)
         global_rl_step = self.sess.run(self.global_rl_step)
         n_updates += global_rl_step
         while global_rl_step < n_updates - self._n_workers:
@@ -140,8 +138,6 @@ class Worker:
         self.pipe.send("{} going IDLE".format(self.name))
 
     def run_all(self, n_updates, summary_prefix, train_actor=True):
-        self.def_rl_summaries(summary_prefix)
-        self.def_model_summaries(summary_prefix)
         global_rl_step = self.sess.run(self.global_rl_step)
         n_updates += global_rl_step
         while global_rl_step < n_updates - self._n_workers:
@@ -161,8 +157,6 @@ class Worker:
         self.pipe.send("{} (display) going IDLE".format(self.name))
 
     def run_model(self, n_updates, summary_prefix):
-        self.def_rl_summaries(summary_prefix)
-        self.def_model_summaries(summary_prefix)
         global_model_step = self.sess.run(self.global_model_step)
         n_updates += global_model_step
         while global_model_step < n_updates - self._n_workers:
@@ -304,8 +298,8 @@ class JointAgentWorker(Worker):
     def define_net_dims(self):
         self.n_discrete = self.env._n_discrete
         self.model_net_dim = [self.n_discrete * 3, 600, 600, 600, self.n_discrete]
-        self.critic_net_dim = [4 + self.n_discrete * 4 * 3, 600, 1]
-        self.actor_net_dim = [self.n_discrete * 4 * 3, 600, 4]
+        self.critic_net_dim = [4 + self.n_discrete * 4 * 2, 600, 1]
+        self.actor_net_dim = [self.n_discrete * 4 * 2, 600, 4]
 
     def define_model(self):
         #############################
@@ -341,13 +335,13 @@ class JointAgentWorker(Worker):
         self.model_loss = tf.reduce_mean(self.model_losses, name="loss")
         self.define_reward(**self.reward_params)
         self.global_model_step = tf.Variable(0, dtype=tf.int32)
-        self.global_model_step_inc = self.global_model_step.saaign_add(1)
+        self.global_model_step_inc = self.global_model_step.assign_add(1)
         # optimizer / summary
         self.model_optimizer = tf.train.AdamOptimizer(1e-3)
         self.model_train_op = self.model_optimizer.minimize(self.model_loss)
         sum_model_loss = tf.summary.scalar("/model/loss", self.model_losses[0])
         sum_model_reward = tf.summary.scalar("/model/reward", self.rewards[0])
-        self.model_summary = tf.summary.gather([sum_model_loss, sum_model_reward])
+        self.model_summary = tf.summary.merge([sum_model_loss, sum_model_reward])
 
     def define_reinforcement_learning(self):
         #############################
@@ -377,10 +371,8 @@ class JointAgentWorker(Worker):
                 activation_fn = tf.nn.relu if i < len(self.actor_net_dim) - 2 else None
                 prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
             self.greedy_actions = prev_layer
-            self.stochastic_actions = self.greedy_actions + tf.random_uniform(shape=tf.shape(self.greedy_actions), stddev=0.05)
+            self.stochastic_actions = self.greedy_actions + tf.random_normal(shape=tf.shape(self.greedy_actions), stddev=0.05)
             actor_vars = [x for x in tf.global_variables() if x.name.startswith("actor_net")]
-            print("[DEBUG] {} \n {} \n\n".format(self.name, tf.global_variables()))
-            print("[DEBUG] {} \n {} \n\n".format(self.name, actor_vars))
         with tf.variable_scope("critic_net"):
             prev_layer = tf.concat([self.rl_inputs, self.actions], axis=1)
             for i, d in enumerate(self.critic_net_dim[1:]):
@@ -397,7 +389,7 @@ class JointAgentWorker(Worker):
         constant_gammas = tf.fill(dims=[tf.shape(self.rl_inputs)[0]], value=self.discount_factor)
         increasing_discounted_gammas = tf.cumprod(constant_gammas, reverse=True)
         return_targets = self.return_targets_not_bootstraped + increasing_discounted_gammas * self.critic_value[-1]
-        self.critic_losses = (self.return_targets - self.critic_value) ** 2  # * (1 - increasing_discounted_gammas)
+        self.critic_losses = (return_targets - self.critic_value) ** 2  # * (1 - increasing_discounted_gammas)
         self.critic_loss = tf.reduce_mean(self.critic_losses, name="critic_loss")
         self.actor_loss = -tf.reduce_mean(actor_value)
         # train ops
@@ -410,12 +402,12 @@ class JointAgentWorker(Worker):
             with tf.control_dependencies([self.actor_train_op]):
                 self.rl_train_op = tf.no_op()
         # summaries
-        sum_actor_loss = tf.summary.scalar("/rl/actor_loss", self.actor_loss[0])
-        sum_critic_loss = tf.summary.scalar("/rl/critic_loss", self.critic_loss[0])
-        critic_quality = self.critic_losses[0] / tf.reduce_mean((self.return_targets - tf.reduce_mean(self.return_targets)) ** 2)
-        sum_critic_quality = tf.summary.scalar("/rl/critic_quality", self.critic_quality)
+        sum_actor_loss = tf.summary.scalar("/rl/actor_loss", -actor_value[0])
+        sum_critic_loss = tf.summary.scalar("/rl/critic_loss", self.critic_losses[0])
+        critic_quality = self.critic_losses[0] / tf.reduce_mean((return_targets - tf.reduce_mean(return_targets)) ** 2)
+        sum_critic_quality = tf.summary.scalar("/rl/critic_quality", critic_quality)
         sum_policy_gradient = tf.summary.scalar("/rl/policy_grad", tf.reduce_mean(tf.abs(tf.gradients(actor_value, self.greedy_actions))))
-        self.rl_summary = tf.summary.gather([sum_actor_loss, sum_critic_loss, sum_critic_quality, sum_policy_gradient])
+        self.rl_summary = tf.summary.merge([sum_actor_loss, sum_critic_loss, sum_critic_quality, sum_policy_gradient])
 
     def get_model_state(self):
         return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
