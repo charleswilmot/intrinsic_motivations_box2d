@@ -252,11 +252,12 @@ class Worker:
 
     def update_reinforcement_learning(self, model_states, rl_states, actions, train_actor=True):
         feed_dict = self.to_model_feed_dict(states=model_states, targets=True)
-        rewards, model_losses = self.sess.run([self.rewards, self.model_losses], feed_dict=feed_dict)
+        rewards, model_losses, model_summary = self.sess.run([self.rewards, self.model_losses, self.model_summary], feed_dict=feed_dict)
         feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards, model_losses=model_losses)
         train_op = self.rl_train_op if train_actor else self.critic_train_op
         fetches = [self.actor_loss, self.critic_loss, self.global_rl_step_inc, train_op, self.rl_summary]
         aloss, closs, global_rl_step, _, rl_summary = self.sess.run(fetches, feed_dict=feed_dict)
+        self.summary_writer.add_summary(model_summary, global_step=global_rl_step)
         self.summary_writer.add_summary(rl_summary, global_step=global_rl_step)
         if global_rl_step % 100 <= self._n_workers:
             self.summary_writer.flush()
@@ -317,7 +318,7 @@ class JointAgentWorker(Worker):
         # self.global_model_step
         # self.model_train_op
         # self.model_summary
-        # self.model_summary_at_rl_time   --> missing in current ipl, TODO
+        # self.model_summary_at_rl_time   --> missing in current ipl, TODO  --> useless ?
         # PLACEHOLDERS : ############
         # self.model_inputs
         # self.model_targets
@@ -338,13 +339,15 @@ class JointAgentWorker(Worker):
         self.model_outputs = tf.stack(splited_model_outputs, axis=1)
         self.model_losses = tf.reduce_mean((self.model_outputs - self.model_targets) ** 2, axis=[-2, -1])
         self.model_loss = tf.reduce_mean(self.model_losses, name="loss")
-        self.model_chance_loss = tf.reduce_mean((self.model_inputs[:, 0, :, :] - self.model_targets) ** 2)
         self.define_reward(**self.reward_params)
         self.global_model_step = tf.Variable(0, dtype=tf.int32)
         self.global_model_step_inc = self.global_model_step.saaign_add(1)
         # optimizer / summary
         self.model_optimizer = tf.train.AdamOptimizer(1e-3)
         self.model_train_op = self.model_optimizer.minimize(self.model_loss)
+        sum_model_loss = tf.summary.scalar("/model/loss", self.model_losses[0])
+        sum_model_reward = tf.summary.scalar("/model/reward", self.rewards[0])
+        self.model_summary = tf.summary.gather([sum_model_loss, sum_model_reward])
 
     def define_reinforcement_learning(self):
         #############################
