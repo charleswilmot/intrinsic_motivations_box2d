@@ -142,13 +142,13 @@ class Worker:
     def run_all(self, n_updates, summary_prefix, train_actor=True):
         self.def_rl_summaries(summary_prefix)
         self.def_model_summaries(summary_prefix)
-        global_both_step = self.sess.run(self.global_both_step)
-        n_updates += global_both_step
-        while global_both_step < n_updates - self._n_workers:
+        global_rl_step = self.sess.run(self.global_rl_step)
+        n_updates += global_rl_step
+        while global_rl_step < n_updates - self._n_workers:
             # Collect some experience
             transitions = self.run_n_rl_steps()
             # Update the global networks
-            global_both_step = self.update_all(*transitions, train_actor=train_actor)
+            global_rl_step = self.update_all(*transitions, train_actor=train_actor)
         self.summary_writer.flush()
         self.pipe.send("{} going IDLE".format(self.name))
 
@@ -176,7 +176,7 @@ class Worker:
     def get_action(self):
         state = self.get_rl_state()
         feed_dict = self.to_rl_feed_dict(states=[state])
-        action = self.sess.run(self.stochastic_action, feed_dict=feed_dict)
+        action = self.sess.run(self.stochastic_actions, feed_dict=feed_dict)
         return action[0]
 
     def run_n_rl_steps(self):
@@ -213,7 +213,7 @@ class Worker:
 
     # TODO put that function in the subclass
     def run_n_display_steps(self, win, sample=True):
-        action_return_fetches = [self.stochastic_action if sample else self.greedy_action, self.critic_value]
+        action_return_fetches = [self.stochastic_actions if sample else self.greedy_actions, self.critic_value]
         predicted_positions_reward_fetches = [self.model_outputs, self.rewards]
         for _ in range(self.sequence_length):
             # get current vision
@@ -255,7 +255,7 @@ class Worker:
         rewards, model_losses = self.sess.run([self.rewards, self.model_losses], feed_dict=feed_dict)
         feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards, model_losses=model_losses)
         train_op = self.rl_train_op if train_actor else self.critic_train_op
-        fetches = [self.actor_loss, self.critic_loss, self.global_rl_step, train_op, self.rl_summary]
+        fetches = [self.actor_loss, self.critic_loss, self.global_rl_step_inc, train_op, self.rl_summary]
         aloss, closs, global_rl_step, _, rl_summary = self.sess.run(fetches, feed_dict=feed_dict)
         self.summary_writer.add_summary(rl_summary, global_step=global_rl_step)
         if global_rl_step % 100 <= self._n_workers:
@@ -266,7 +266,7 @@ class Worker:
 
     def update_model(self, states):
         feed_dict = self.to_model_feed_dict(states=states, targets=True)
-        fetches = [self.model_loss, self.global_model_step, self.model_train_op, self.model_summary]
+        fetches = [self.model_loss, self.global_model_step_inc, self.model_train_op, self.model_summary]
         loss, global_model_step, _, model_summary = self.sess.run(fetches, feed_dict=feed_dict)
         self.summary_writer.add_summary(model_summary, global_step=global_model_step)
         if global_model_step % 100 <= self._n_workers:
@@ -276,19 +276,19 @@ class Worker:
 
     def update_all(self, model_states, rl_states, actions, train_actor=True):
         feed_dict = self.to_model_feed_dict(states=model_states, targets=True)
-        fetches = [self.rewards, self.model_losses, self.model_loss, self.model_train_op, self.model_summary, self.global_both_step]
-        rewards, model_losses, mloss, _, model_summary, global_both_step = self.sess.run(fetches, feed_dict=feed_dict)
-        self.summary_writer.add_summary(model_summary, global_step=global_both_step)
+        fetches = [self.rewards, self.model_losses, self.model_loss, self.model_train_op, self.model_summary, self.global_rl_step]
+        rewards, model_losses, mloss, _, model_summary, global_rl_step = self.sess.run(fetches, feed_dict=feed_dict)
+        self.summary_writer.add_summary(model_summary, global_step=global_rl_step)
         feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards, model_losses=model_losses)
         train_op = self.rl_train_op if train_actor else self.critic_train_op
-        fetches = [self.actor_loss, self.critic_loss, self.global_both_step, train_op, self.rl_summary]
-        aloss, closs, global_both_step, _, rl_summary = self.sess.run(fetches, feed_dict=feed_dict)
-        self.summary_writer.add_summary(rl_summary, global_step=global_both_step)
-        if global_both_step % 100 <= self._n_workers:
+        fetches = [self.actor_loss, self.critic_loss, self.global_rl_step_inc, train_op, self.rl_summary]
+        aloss, closs, global_rl_step, _, rl_summary = self.sess.run(fetches, feed_dict=feed_dict)
+        self.summary_writer.add_summary(rl_summary, global_step=global_rl_step)
+        if global_rl_step % 100 <= self._n_workers:
             self.summary_writer.flush()
         print("{} finished update number {} (model loss = {:.3f}  critic loss = {:.3f})".format(
-              self.name, global_both_step, mloss, closs))
-        return global_both_step
+              self.name, global_rl_step, mloss, closs))
+        return global_rl_step
 
 
 class JointAgentWorker(Worker):
@@ -303,9 +303,8 @@ class JointAgentWorker(Worker):
     def define_net_dims(self):
         self.n_discrete = self.env._n_discrete
         self.model_net_dim = [self.n_discrete * 3, 600, 600, 600, self.n_discrete]
-        self.rl_shared_net_dim = [self.n_discrete * 4 * 3, 600]
-        self.actor_remaining_net_dim = [4]
-        self.critic_remaining_net_dim = [1]
+        self.critic_net_dim = [4 + self.n_discrete * 4 * 3, 600, 1]
+        self.actor_net_dim = [self.n_discrete * 4 * 3, 600, 4]
 
     def define_model(self):
         #############################
@@ -342,16 +341,17 @@ class JointAgentWorker(Worker):
         self.model_chance_loss = tf.reduce_mean((self.model_inputs[:, 0, :, :] - self.model_targets) ** 2)
         self.define_reward(**self.reward_params)
         self.global_model_step = tf.Variable(0, dtype=tf.int32)
+        self.global_model_step_inc = self.global_model_step.saaign_add(1)
         # optimizer / summary
         self.model_optimizer = tf.train.AdamOptimizer(1e-3)
-        self.model_train_op = self.model_optimizer.minimize(self.model_loss, global_step=self.global_model_step)
+        self.model_train_op = self.model_optimizer.minimize(self.model_loss)
 
     def define_reinforcement_learning(self):
         #############################
         # MUST DEFINE : #############
         #############################
-        # self.stochastic_action
-        # self.greedy_action
+        # self.stochastic_actions
+        # self.greedy_actions
         # self.critic_value
         # self.critic_loss
         # self.actor_loss
@@ -363,17 +363,56 @@ class JointAgentWorker(Worker):
         # PLACEHOLDERS : ############
         # self.rl_inputs
         # self.actions
-        # self.rl_rewards
         # self.return_targets_not_bootstraped
-        # self.rl_model_losses
         #############################
-        # self.rl_inputs = tf.placeholder(shape=[None, ???], dtype=tf.float32, name="actor_inputs")
-        # self.return_targets_not_bootstraped = tf.placeholder(shape=[None], dtype=tf.float32, name="returns_target")
-        # batch_size = tf.shape(self.rl_inputs)[0]
-        # constant_gammas = tf.fill(dims=[batch_size], value=self.discount_factor)
-        # increasing_discounted_gammas = tf.cumprod(constant_gammas, reverse=True)
-        # prev_layer = self.rl_inputs
-        pass
+        self.rl_inputs = tf.placeholder(shape=[None, self.actor_net_dim[0]], dtype=tf.float32, name="actor_inputs")
+        self.return_targets_not_bootstraped = tf.placeholder(shape=[None], dtype=tf.float32, name="returns_target")
+        self.actions = tf.placeholder(shape=[None, self.actor_net_dim[-1]], dtype=tf.float32, name="actions")
+        with tf.variable_scope("actor_net"):
+            prev_layer = self.rl_inputs
+            for i, d in enumerate(self.actor_net_dim[1:]):
+                activation_fn = tf.nn.relu if i < len(self.actor_net_dim) - 2 else None
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
+            self.greedy_actions = prev_layer
+            self.stochastic_actions = self.greedy_actions + tf.random_uniform(shape=tf.shape(self.greedy_actions), stddev=0.05)
+            actor_vars = [x for x in tf.global_variables() if x.name.startswith("actor_net")]
+            print("[DEBUG] {} \n {} \n\n".format(self.name, tf.global_variables()))
+            print("[DEBUG] {} \n {} \n\n".format(self.name, actor_vars))
+        with tf.variable_scope("critic_net"):
+            prev_layer = tf.concat([self.rl_inputs, self.actions], axis=1)
+            for i, d in enumerate(self.critic_net_dim[1:]):
+                activation_fn = tf.nn.relu if i < len(self.critic_net_dim) - 2 else None
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
+            self.critic_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
+        with tf.variable_scope("critic_net"):
+            prev_layer = tf.concat([self.rl_inputs, self.greedy_actions], axis=1)  # could also add noise (see stochastic)
+            for i, d in enumerate(self.critic_net_dim[1:]):
+                activation_fn = tf.nn.relu if i < len(self.critic_net_dim) - 2 else None
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn, reuse=True)
+            actor_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
+        # losses
+        constant_gammas = tf.fill(dims=[tf.shape(self.rl_inputs)[0]], value=self.discount_factor)
+        increasing_discounted_gammas = tf.cumprod(constant_gammas, reverse=True)
+        return_targets = self.return_targets_not_bootstraped + increasing_discounted_gammas * self.critic_value[-1]
+        self.critic_losses = (self.return_targets - self.critic_value) ** 2  # * (1 - increasing_discounted_gammas)
+        self.critic_loss = tf.reduce_mean(self.critic_losses, name="critic_loss")
+        self.actor_loss = -tf.reduce_mean(actor_value)
+        # train ops
+        self.global_rl_step = tf.Variable(0, dtype=tf.int32)
+        self.global_rl_step_inc = self.global_rl_step.assign_add(1)
+        with tf.control_dependencies([self.global_rl_step_inc]):
+            self.critic_train_op = tf.train.AdamOptimizer(1e-3).minimize(self.critic_loss)
+            self.actor_train_op = tf.train.AdamOptimizer(1e-3).minimize(self.actor_loss, var_list=actor_vars)
+        with tf.control_dependencies([self.critic_train_op]):
+            with tf.control_dependencies([self.actor_train_op]):
+                self.rl_train_op = tf.no_op()
+        # summaries
+        sum_actor_loss = tf.summary.scalar("/rl/actor_loss", self.actor_loss[0])
+        sum_critic_loss = tf.summary.scalar("/rl/critic_loss", self.critic_loss[0])
+        critic_quality = self.critic_losses[0] / tf.reduce_mean((self.return_targets - tf.reduce_mean(self.return_targets)) ** 2)
+        sum_critic_quality = tf.summary.scalar("/rl/critic_quality", self.critic_quality)
+        sum_policy_gradient = tf.summary.scalar("/rl/policy_grad", tf.reduce_mean(tf.abs(tf.gradients(actor_value, self.greedy_actions))))
+        self.rl_summary = tf.summary.gather([sum_actor_loss, sum_critic_loss, sum_critic_quality, sum_policy_gradient])
 
     def get_model_state(self):
         return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
