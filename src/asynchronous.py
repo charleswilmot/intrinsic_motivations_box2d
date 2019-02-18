@@ -252,8 +252,8 @@ class Worker:
 
     def update_reinforcement_learning(self, model_states, rl_states, actions, train_actor=True):
         feed_dict = self.to_model_feed_dict(states=model_states, targets=True)
-        rewards, model_losses, model_summary = self.sess.run([self.rewards, self.model_losses, self.model_summary], feed_dict=feed_dict)
-        feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards, model_losses=model_losses)
+        rewards, model_summary = self.sess.run([self.rewards, self.model_summary], feed_dict=feed_dict)
+        feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards)
         train_op = self.rl_train_op if train_actor else self.critic_train_op
         fetches = [self.actor_loss, self.critic_loss, self.global_rl_step, train_op, self.rl_summary]
         aloss, closs, global_rl_step, _, rl_summary = self.sess.run(fetches, feed_dict=feed_dict)
@@ -277,10 +277,10 @@ class Worker:
 
     def update_all(self, model_states, rl_states, actions, train_actor=True):
         feed_dict = self.to_model_feed_dict(states=model_states, targets=True)
-        fetches = [self.rewards, self.model_losses, self.model_loss, self.model_train_op, self.model_summary, self.global_both_step]
-        rewards, model_losses, mloss, _, model_summary, global_both_step = self.sess.run(fetches, feed_dict=feed_dict)
+        fetches = [self.rewards, self.model_loss, self.model_train_op, self.model_summary, self.global_both_step]
+        rewards, mloss, _, model_summary, global_both_step = self.sess.run(fetches, feed_dict=feed_dict)
         self.summary_writer.add_summary(model_summary, global_step=global_both_step)
-        feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards, model_losses=model_losses)
+        feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards)
         train_op = self.rl_train_op if train_actor else self.critic_train_op
         fetches = [self.actor_loss, self.critic_loss, self.global_both_step, train_op, self.rl_summary]
         aloss, closs, global_both_step, _, rl_summary = self.sess.run(fetches, feed_dict=feed_dict)
@@ -369,7 +369,6 @@ class JointAgentWorker(Worker):
         # self.actions
         # self.rl_rewards
         # self.return_targets_not_bootstraped
-        # self.rl_model_losses
         #############################
         # self.rl_inputs = tf.placeholder(shape=[None, ???], dtype=tf.float32, name="actor_inputs")
         # self.return_targets_not_bootstraped = tf.placeholder(shape=[None], dtype=tf.float32, name="returns_target")
@@ -385,7 +384,7 @@ class JointAgentWorker(Worker):
     def get_rl_state(self):
         return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
 
-    def to_rl_feed_dict(self, states=None, actions=None, rewards=None, model_losses=None):
+    def to_rl_feed_dict(self, states=None, actions=None, rewards=None):
         # transforms the inputs into a feed dict for the actor
         feed_dict = {}
         if states is not None:
@@ -400,8 +399,6 @@ class JointAgentWorker(Worker):
             returns = self.rewards_to_return(rewards)
             feed_dict[self.rl_rewards] = rewards
             feed_dict[self.return_targets_not_bootstraped] = returns
-        if model_losses is not None:
-            feed_dict[self.rl_model_losses] = model_losses
         return feed_dict
 
     def to_model_feed_dict(self, states, targets=False):
