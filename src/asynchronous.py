@@ -428,7 +428,6 @@ class JointAgentWorker(Worker):
         if rewards is not None:
             # reverse pass through the rewards here...
             returns = self.rewards_to_return(rewards)
-            feed_dict[self.rl_rewards] = rewards
             feed_dict[self.return_targets_not_bootstraped] = returns
         return feed_dict
 
