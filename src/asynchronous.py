@@ -421,7 +421,7 @@ class JointAgentWorker(Worker):
         return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
 
     def get_rl_state(self):
-        return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
+        return self.env.discrete_positions, self.env.discrete_speeds
 
     def to_rl_feed_dict(self, states=None, actions=None, rewards=None):
         # transforms the inputs into a feed dict for the actor
