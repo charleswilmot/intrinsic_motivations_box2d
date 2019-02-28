@@ -250,7 +250,7 @@ class Worker:
 
     def update_reinforcement_learning(self, model_states, rl_states, actions, train_actor=True):
         feed_dict = self.to_model_feed_dict(states=model_states, targets=True)
-        rewards, model_summary = self.sess.run([self.rewards, self.model_summary], feed_dict=feed_dict)
+        rewards, model_summary = self.sess.run([self.rewards, self.model_summary_at_rl], feed_dict=feed_dict)
         feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards)
         train_op = self.rl_train_op if train_actor else self.critic_train_op
         fetches = [self.actor_loss, self.critic_loss, self.global_rl_step_inc, train_op, self.rl_summary]
@@ -275,7 +275,7 @@ class Worker:
 
     def update_all(self, model_states, rl_states, actions, train_actor=True):
         feed_dict = self.to_model_feed_dict(states=model_states, targets=True)
-        fetches = [self.rewards, self.model_loss, self.model_train_op, self.model_summary, self.global_rl_step]
+        fetches = [self.rewards, self.model_loss, self.model_train_op, self.model_summary_at_rl, self.global_rl_step]
         rewards, mloss, _, model_summary, global_rl_step = self.sess.run(fetches, feed_dict=feed_dict)
         self.summary_writer.add_summary(model_summary, global_step=global_rl_step)
         feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards)
@@ -341,12 +341,14 @@ class JointAgentWorker(Worker):
         self.global_model_step = tf.Variable(0, dtype=tf.int32)
         self.global_model_step_inc = self.global_model_step.assign_add(1)
         # optimizer / summary
-        self.model_optimizer = tf.train.AdamOptimizer(1e-3)
         self.model_optimizer = tf.train.AdamOptimizer(self.model_lr)
         self.model_train_op = self.model_optimizer.minimize(self.model_loss)
         sum_model_loss = tf.summary.scalar("/model/loss", self.model_losses[0])
         sum_model_reward = tf.summary.scalar("/model/reward", self.rewards[0])
         self.model_summary = tf.summary.merge([sum_model_loss, sum_model_reward])
+        sum_model_loss_at_rl = tf.summary.scalar("/rl/loss", self.model_losses[0])
+        sum_model_reward_at_rl = tf.summary.scalar("/rl/reward", self.rewards[0])
+        self.model_summary_at_rl = tf.summary.merge([sum_model_loss_at_rl, sum_model_reward_at_rl])
 
     def define_reinforcement_learning(self):
         #############################
@@ -409,12 +411,19 @@ class JointAgentWorker(Worker):
             with tf.control_dependencies([self.actor_train_op]):
                 self.rl_train_op = tf.no_op()
         # summaries
-        sum_actor_loss = tf.summary.scalar("/rl/actor_loss", -actor_value[0])
-        sum_critic_loss = tf.summary.scalar("/rl/critic_loss", self.critic_losses[0])
-        critic_quality = self.critic_losses[0] / tf.reduce_mean((return_targets - tf.reduce_mean(return_targets)) ** 2)
-        sum_critic_quality = tf.summary.scalar("/rl/critic_quality", critic_quality)
-        sum_policy_gradient = tf.summary.scalar("/rl/policy_grad", tf.reduce_mean(tf.abs(tf.gradients(actor_value, self.greedy_actions))))
-        self.rl_summary = tf.summary.merge([sum_actor_loss, sum_critic_loss, sum_critic_quality, sum_policy_gradient])
+        sum_actor_loss = tf.summary.scalar("/rl/actor_loss", tf.clip_by_value(-self.actor_value[0], -20, 20))
+        sum_critic_loss = tf.summary.scalar("/rl/critic_loss", tf.clip_by_value(self.critic_losses[0], -20, 20))
+        critic_quality = tf.reduce_mean(self.critic_losses / tf.reduce_mean((return_targets - tf.reduce_mean(return_targets)) ** 2))
+        sum_critic_quality = tf.summary.scalar("/rl/critic_quality", tf.clip_by_value(critic_quality, -20, 20))
+        names = ["arm1_arm2_left", "arm1_arm2_right", "ground_arm1_left", "ground_arm1_right"]
+        grad = tf.gradients(self.actor_value, self.greedy_actions)[0]
+        action_summaries, grad_summaries = [], []
+        for i, name in zip(range(4), names):
+            action_summary = tf.summary.scalar("joints/{}".format(name), self.greedy_actions[0, i])
+            action_summaries.append(action_summary)
+            grad_summary = tf.summary.scalar("joints/{}_grad".format(name), grad[0, i])
+            grad_summaries.append(grad_summary)
+        self.rl_summary = tf.summary.merge([sum_actor_loss, sum_critic_loss, sum_critic_quality, grad_summaries, action_summaries])
 
     def get_model_state(self):
         return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
