@@ -133,6 +133,31 @@ parser.add_argument(
     default=None
 )
 
+parser.add_argument(
+    '-mlr', '--model-lr',
+    type=float,
+    action='store',
+    help="Model learning rate",
+    default=1e-4
+)
+
+parser.add_argument(
+    '-clr', '--critic-lr',
+    type=float,
+    action='store',
+    help="Critic learning rate",
+    default=1e-3
+)
+
+parser.add_argument(
+    '-alr', '--actor-lr',
+    type=float,
+    action='store',
+    help="Actor learning rate",
+    default=1e-5
+)
+
+
 args = parser.parse_args()
 with open(args.environment_conf, "rb") as f:
     args_env = pickle.load(f)
@@ -153,6 +178,7 @@ else:
     reward_params = {"model_loss_converges_to": 0.043}
 
 args_worker = (args.discount_factor, args.sequence_length, reward_params)
+args_worker = (args.discount_factor, args.sequence_length, reward_params, args.model_lr, args.critic_lr, args.actor_lr)
 
 with ac.Experiment(
         args.n_parameter_servers, args.n_workers, RewardCls,

@@ -52,7 +52,8 @@ def get_available_port(start_port=6006):
 
 
 class Worker:
-    def __init__(self, task_index, pipe, env, cluster, logdir, discount_factor, sequence_length, reward_params):
+    def __init__(self, task_index, pipe, env, cluster, logdir, discount_factor, sequence_length, reward_params,
+                 model_lr, critic_lr, actor_lr):
         self.task_index = task_index
         self.cluster = cluster
         self._n_workers = self.cluster.num_tasks("worker") - 1
@@ -64,6 +65,9 @@ class Worker:
         self.discount_factor = discount_factor
         self.sequence_length = sequence_length
         self.reward_params = reward_params
+        self.model_lr = model_lr
+        self.critic_lr = critic_lr
+        self.actor_lr = actor_lr
         self.pipe = pipe
         self.define_networks()
         self.logdir = logdir
@@ -338,6 +342,7 @@ class JointAgentWorker(Worker):
         self.global_model_step_inc = self.global_model_step.assign_add(1)
         # optimizer / summary
         self.model_optimizer = tf.train.AdamOptimizer(1e-3)
+        self.model_optimizer = tf.train.AdamOptimizer(self.model_lr)
         self.model_train_op = self.model_optimizer.minimize(self.model_loss)
         sum_model_loss = tf.summary.scalar("/model/loss", self.model_losses[0])
         sum_model_reward = tf.summary.scalar("/model/reward", self.rewards[0])
@@ -398,6 +403,8 @@ class JointAgentWorker(Worker):
         with tf.control_dependencies([self.global_rl_step_inc]):
             self.critic_train_op = tf.train.AdamOptimizer(1e-3).minimize(self.critic_loss)
             self.actor_train_op = tf.train.AdamOptimizer(1e-3).minimize(self.actor_loss, var_list=actor_vars)
+            self.critic_train_op = tf.train.AdamOptimizer(self.critic_lr).minimize(self.critic_loss)
+            self.actor_train_op = tf.train.AdamOptimizer(self.actor_lr).minimize(self.actor_loss, var_list=actor_vars)
         with tf.control_dependencies([self.critic_train_op]):
             with tf.control_dependencies([self.actor_train_op]):
                 self.rl_train_op = tf.no_op()

@@ -8,10 +8,13 @@
 import os
 import re
 import time
+import numpy as np
 
-
-array_id = int(os.environ["SLURM_ARRAY_TASK_ID"])
-array_path = "../experiments/array_df_095_continous_vs_stages_vs_separate/"
+try:
+    array_id = int(os.environ["SLURM_ARRAY_TASK_ID"])
+except:
+    array_id = -1
+array_path = "../experiments/array_df_085_target_0035_continous_mlr_netdim_600/"
 slurm_log_path = "{}/log_array_id_{}.log".format(array_path, array_id)
 
 
@@ -101,7 +104,49 @@ def array_wrt_training_type():
     return commands, paths
 
 
-commands, paths = array_wrt_training_type()
+def array_wrt_learning_rates():
+    commands, paths = [], []
+    for log_clr in np.linspace(-4, -2, 5):
+        clr = 10 ** log_clr
+        for log_alr in np.linspace(-6, -4, 5):
+            alr = 10 ** log_alr
+            path = array_path + "/clr_10e{:3f}_alr_10e{:3f}".format(log_clr, log_alr)
+            args_dict = {}
+            args_dict["--target-pred-err"] = [0.035]
+            args_dict["-df"] = 0.85
+            args_dict["-nw"] = 32
+            args_dict["-np"] = 2
+            args_dict["-sl"] = 256
+            args_dict["--continuous"] = 5000
+            args_dict["-clr"] = clr
+            args_dict["-alr"] = alr
+            commands.append(make_command(path, args_dict))
+            paths.append(path)
+    return commands, path
+
+
+def array_wrt_model_learning_rates():
+    commands, paths = [], []
+    for log_mlr in np.linspace(-7, -2, 11):
+        mlr = 10 ** log_mlr
+        path = array_path + "/mlr_1e{:3f}".format(log_mlr)
+        args_dict = {}
+        args_dict["--target-pred-err"] = [0.035]
+        args_dict["-df"] = 0.85
+        args_dict["-nw"] = 32
+        args_dict["-np"] = 2
+        args_dict["-sl"] = 256
+        args_dict["--continuous"] = 5000
+        args_dict["-clr"] = 1e-3
+        args_dict["-alr"] = 1e-5
+        args_dict["-mlr"] = mlr
+        commands.append(make_command(path, args_dict))
+        paths.append(path)
+    return commands, path
+
+
+# commands, paths = array_wrt_training_type()
+commands, paths = array_wrt_model_learning_rates()
 if array_id < len(commands):
     cmd = commands[array_id]
     experiment_path = paths[array_id]
