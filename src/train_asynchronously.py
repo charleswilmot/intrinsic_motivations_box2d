@@ -190,14 +190,14 @@ with ac.Experiment(
         json.dump(args.__dict__, fp=f, indent=4, sort_keys=True)
     ### start display if needed
     if args.display:
-        experiment.start_display_worker()
+        experiment.start_display_worker(sample=False)
         experiment.start_tensorboard()
     ### Save initial weights
     experiment.save_model("initial")
     if args.continuous:
         ### continuous learning
         done = 0
-        save_every = 3000
+        save_every = 500
         i = 0
         while done < args.continuous:
             experiment.asynchronously_run_both(save_every, "continuous")
