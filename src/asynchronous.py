@@ -174,7 +174,7 @@ class Worker:
     def get_action(self):
         state = self.get_rl_state()
         feed_dict = self.to_rl_feed_dict(states=[state])
-        action = self.sess.run(self.stochastic_actions, feed_dict=feed_dict)
+        action = self.sess.run(self.greedy_actions, feed_dict=feed_dict)
         return action[0]
 
     def run_n_rl_steps(self):
