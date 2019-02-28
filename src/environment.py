@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 def discretize(arr, mini, maxi, n):
     discrete = np.tile(np.linspace(mini, maxi, n), list(arr.shape) + [1])
     discrete -= np.expand_dims(arr, -1)
-    discrete = np.cos(np.pi * discrete / (maxi - mini) - np.pi * (maxi + mini) / (maxi - mini) + np.pi / 2) ** 20
+    discrete = np.cos(np.pi * discrete / (maxi - mini) - np.pi * (maxi + mini) / (maxi - mini)) ** 20
     return discrete
 
 
@@ -46,7 +46,7 @@ class Environment(object):
         self.joints = joints
         self.joint_pids = {key: pid.PID(dt=self.dt)
                            for key in self.joints}
-        self._joint_keys = [key for key in self.joints]
+        self._joint_keys = [key for key in sorted(self.joints)]
         self._joint_keys.sort()
         self._buf_positions = np.zeros(len(self.joints))
         self._buf_target_positions = np.zeros(len(self.joints))
@@ -69,9 +69,9 @@ class Environment(object):
             if key in self.joints:
                 if key in self._joints_in_position_mode:
                     self._joints_in_position_mode.remove(key)
-                self.joints[key].motorSpeed = speeds[key]
+                self.joints[key].motorSpeed = np.float64(speeds[key])
 
-    def set_positions(self, positions):
+    def set_positions_old(self, positions):
         for i, key in enumerate(self._joint_keys):
             if key in positions:
                 self._joints_in_position_mode.add(key)
@@ -96,6 +96,21 @@ class Environment(object):
                         else:
                             delta = inner
                     pos = current + delta
+                self._buf_target_positions[i] = pos
+                self.joint_pids[key].setpoint = pos
+
+    def set_positions(self, positions):
+        threshold = 0.05
+        for i, key in enumerate(self._joint_keys):
+            if key in positions:
+                self._joints_in_position_mode.add(key)
+                pos = positions[key]
+                if self.joints[key].limitEnabled:
+                    min_lim, max_lim = self.joints[key].limits
+                    if pos < min_lim + threshold:
+                        pos = min_lim - threshold * threshold / (pos - 2 * threshold - min_lim)
+                    elif pos > max_lim - threshold:
+                        pos = max_lim - threshold * threshold / (pos + 2 * threshold - max_lim)
                 self._buf_target_positions[i] = pos
                 self.joint_pids[key].setpoint = pos
 
@@ -133,7 +148,7 @@ class Environment(object):
             self._computed_tactile = True
             return self._buf_tactile
 
-    def _get_state_positions(self):
+    def _get_state_positions_old(self):
         if self._computed_positions:
             return self._buf_positions
         else:
@@ -141,6 +156,15 @@ class Environment(object):
                 self._buf_positions[i] = self.joints[key].angle
             self._buf_positions %= 2 * np.pi
             self._buf_positions -= np.pi
+            self._computed_positions = True
+            return self._buf_positions
+
+    def _get_state_positions(self):
+        if self._computed_positions:
+            return self._buf_positions
+        else:
+            for i, key in enumerate(self._joint_keys):
+                self._buf_positions[i] = self.joints[key].angle
             self._computed_positions = True
             return self._buf_positions
 

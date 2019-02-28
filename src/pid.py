@@ -1,5 +1,5 @@
 class PID(object):
-    def __init__(self, dt=0.01, Kp=20.0, Ki=1.0, Kd=1.0):
+    def __init__(self, dt=0.01, Kp=10.0, Ki=0.0, Kd=0.0):
         self.dt = dt
         self.previous_error = 0.0
         self.integral = 0.0
