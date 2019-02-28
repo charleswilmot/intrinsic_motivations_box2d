@@ -399,13 +399,12 @@ def get_tab_data(data, params, by1, by2, func, name=""):
     for k in params:
         by1_val = by1(params[k])
         by2_val = by2(params[k])
-        # print(by1_val, by2_val)
         if by1_val not in val_dict:
             val_dict[by1_val] = {}
         if by2_val not in val_dict[by1_val]:
             val_dict[by1_val][by2_val] = func(data[k])
         else:
-            raise ValueError("error, demerden sie sich")
+            raise ValueError("{}\t{}\t>>\t{}    already found".format(k, by1_val, by2_val))
     ret = []
     ret.append([name] + [str(x) for x in list(sorted(val_dict))])
     dummy_key = list(val_dict)[0]
@@ -458,23 +457,25 @@ class ArraySummary(tex.Document):
         self.append(tex.Command("input", tex.NoEscape(os.path.abspath(path + "experiment.tex"))))
 
     def add_tabular(self, array):
+        # \textcolor{\color{red!20!green!30}}{<text>}
         with self.create(tex.Tabular('l|' + 'c' * (len(array[0]) - 1))) as table:
             for i, line in enumerate(array):
                 table.add_row(line)
                 # table.add_row([str(x) for x in line])
                 if i == 0:
                     table.add_hline()
+        self.append(tex.utils.NoEscape("\\\\~\\\\"))
 
     def clearpage(self):
         self.append(tex.Command("clearpage"))
 
 
 # generate_latex("../experiments/array_no_entropy_reg", regenerate_plots=False)
-path_to_array = "../experiments/array_df_095_continous_vs_stages_vs_separate/"
+path_to_array = "../experiments/array_df_085_target_0035_continous_mlr_netdim_600/"
 # data = load_data(path_to_data_in=path_to_array + "data.pkl")
 data = load_data(path_to_exps=path_to_array + "*/",
                  path_to_data_out=path_to_array + "data.pkl")
-generate_all_plots(data, regenerate=False)
+generate_all_plots(data, regenerate=True)
 generate_all_experiment_tex_files(data)
 parameters = load_parameters(path_to_array + "*/")
 
@@ -493,30 +494,106 @@ def by_reward_type(d):
 parameters_by_reward_type = group_parameters_by(parameters, by_reward_type)
 
 
-arrsum = ArraySummary("Continuous vs Stage-wise vs Separate")
-with arrsum.create(tex.Section("Overview")):
-    arrsum.add_tabular(get_tab_data(data, parameters, by_exp_type, by_reward, get_std, name="STD"))
-for reward_type in ["minimize", "maximize", "target", "range"]:
-    grouped_by_reward_params = group_parameters_by(parameters_by_reward_type[reward_type], lambda x: tuple(x[reward_type + "_pred_err"]) if type(x[reward_type + "_pred_err"]) == list else x[reward_type + "_pred_err"])
-    for k in grouped_by_reward_params:
-        with arrsum.create(tex.Section(reward_type + str(k))):
-            groups = group_parameters_by(grouped_by_reward_params[k], lambda x: "stages" if x["continuous"] is None else "continuous")
-            with arrsum.create(tex.Subsection("Stages")):
-                sub_groups = group_parameters_by(groups["stages"], lambda x: "separate" if x["separate"] else "joint")
-                with arrsum.create(tex.Subsubsection("Separate")):
-                    for p in sub_groups["separate"]:
-                        arrsum.add_experiment(p)
-                with arrsum.create(tex.Subsubsection("Joint")):
-                    for p in sub_groups["joint"]:
-                        arrsum.add_experiment(p)
+def by_clr(x):
+    return "{}".format(np.log10(x["critic_lr"]))
+
+
+def by_alr(x):
+    return "{}".format(np.log10(x["actor_lr"]))
+
+
+def by_mlr(x):
+    return "{}".format(np.log10(x["model_lr"]))
+
+
+def by_nothing(x):
+    return " "
+
+
+def get_mean_end_reward(data):
+    return "{:.3f}".format(np.mean(data["rl"]["reward"][1][-500:]))
+
+
+def get_std_end_reward(data):
+    return "{:.3f}".format(np.std(data["rl"]["reward"][1][-500:]))
+
+
+def get_mean_end_loss(data):
+    return "{:.3f}".format(np.mean(data["rl"]["loss"][1][-500:]))
+
+
+def get_std_end_loss(data):
+    return "{:.3f}".format(np.std(data["rl"]["loss"][1][-500:]))
+
+
+def get_mean_critic_q(data):
+    return "{:.3f}".format(np.mean(data["rl"]["critic_quality"][1]))
+
+
+def continuous_stagewise_separate():
+    arrsum = ArraySummary("Continuous vs Stage-wise vs Separate")
+    with arrsum.create(tex.Section("Overview")):
+        arrsum.add_tabular(get_tab_data(data, parameters, by_exp_type, by_reward, get_std, name="STD"))
+    for reward_type in ["minimize", "maximize", "target", "range"]:
+        grouped_by_reward_params = group_parameters_by(parameters_by_reward_type[reward_type], lambda x: tuple(x[reward_type + "_pred_err"]) if type(x[reward_type + "_pred_err"]) == list else x[reward_type + "_pred_err"])
+        for k in grouped_by_reward_params:
+            with arrsum.create(tex.Section(reward_type + str(k))):
+                groups = group_parameters_by(grouped_by_reward_params[k], lambda x: "stages" if x["continuous"] is None else "continuous")
+                with arrsum.create(tex.Subsection("Stages")):
+                    sub_groups = group_parameters_by(groups["stages"], lambda x: "separate" if x["separate"] else "joint")
+                    with arrsum.create(tex.Subsubsection("Separate")):
+                        for p in sub_groups["separate"]:
+                            arrsum.add_experiment(p)
+                    with arrsum.create(tex.Subsubsection("Joint")):
+                        for p in sub_groups["joint"]:
+                            arrsum.add_experiment(p)
+                arrsum.clearpage()
+                with arrsum.create(tex.Subsection("Continuous")):
+                    sub_groups = group_parameters_by(groups["continuous"], lambda x: "separate" if x["separate"] else "joint")
+                    with arrsum.create(tex.Subsubsection("Separate")):
+                        for p in sub_groups["separate"]:
+                            arrsum.add_experiment(p)
+                    with arrsum.create(tex.Subsubsection("Joint")):
+                        for p in sub_groups["joint"]:
+                            arrsum.add_experiment(p)
+                arrsum.clearpage()
+    arrsum.generate_pdf(filepath=path_to_array + "new_impl", clean_tex=False)
+
+
+def learning_rates():
+    arrsum = ArraySummary("Find best learning rate")
+    with arrsum.create(tex.Section("Overview")):
+        arrsum.add_tabular(get_tab_data(data, parameters, by_clr, by_alr, get_mean_critic_q, name="critic quality"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_clr, by_alr, get_mean_end_reward, name="mean reward"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_clr, by_alr, get_std_end_reward, name="std reward"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_clr, by_alr, get_mean_end_loss, name="mean loss"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_clr, by_alr, get_std_end_loss, name="std loss"))
+    grouped_by_clr = group_parameters_by(parameters, by_clr)
+    for clr in sorted(grouped_by_clr):
+        grouped_by_alr = group_parameters_by(grouped_by_clr[clr], by_alr)
+        for alr in sorted(grouped_by_alr):
+            with arrsum.create(tex.Section("Critic {}    Actor {}".format(clr, alr))):
+                for p in grouped_by_alr[alr]:
+                    arrsum.add_experiment(p)
+                arrsum.clearpage()
+    arrsum.generate_pdf(filepath=path_to_array + "new_impl", clean_tex=False)
+
+
+def model_learning_rates():
+    arrsum = ArraySummary("Find best learning rate")
+    with arrsum.create(tex.Section("Overview")):
+        arrsum.add_tabular(get_tab_data(data, parameters, by_mlr, by_nothing, get_mean_critic_q, name="critic quality"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_mlr, by_nothing, get_mean_end_reward, name="mean reward"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_mlr, by_nothing, get_std_end_reward, name="std reward"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_mlr, by_nothing, get_mean_end_loss, name="mean loss"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_mlr, by_nothing, get_std_end_loss, name="std loss"))
+    grouped_by_mlr = group_parameters_by(parameters, by_mlr)
+    for mlr in sorted(grouped_by_mlr):
+        with arrsum.create(tex.Section("Model learning rate  {}".format(mlr))):
+            for p in grouped_by_mlr[mlr]:
+                arrsum.add_experiment(p)
             arrsum.clearpage()
-            with arrsum.create(tex.Subsection("Continuous")):
-                sub_groups = group_parameters_by(groups["continuous"], lambda x: "separate" if x["separate"] else "joint")
-                with arrsum.create(tex.Subsubsection("Separate")):
-                    for p in sub_groups["separate"]:
-                        arrsum.add_experiment(p)
-                with arrsum.create(tex.Subsubsection("Joint")):
-                    for p in sub_groups["joint"]:
-                        arrsum.add_experiment(p)
-            arrsum.clearpage()
-arrsum.generate_pdf(filepath=path_to_array + "new_impl", clean_tex=False)
+    arrsum.generate_pdf(filepath=path_to_array + "new_impl", clean_tex=False)
+
+
+model_learning_rates()
