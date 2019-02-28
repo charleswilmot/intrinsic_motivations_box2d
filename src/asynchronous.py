@@ -377,8 +377,8 @@ class JointAgentWorker(Worker):
             for i, d in enumerate(self.actor_net_dim[1:]):
                 activation_fn = tf.nn.relu if i < len(self.actor_net_dim) - 2 else None
                 prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
-            self.greedy_actions = prev_layer
-            self.stochastic_actions = self.greedy_actions + tf.random_normal(shape=tf.shape(self.greedy_actions), stddev=0.05)
+            self.greedy_actions = prev_layer * 10
+            self.stochastic_actions = self.greedy_actions + tf.random_normal(shape=tf.shape(self.greedy_actions), stddev=0.1)
             actor_vars = [x for x in tf.global_variables() if x.name.startswith("actor_net")]
         with tf.variable_scope("critic_net"):
             prev_layer = tf.concat([self.rl_inputs, self.actions], axis=1)
