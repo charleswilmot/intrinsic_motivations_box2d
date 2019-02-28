@@ -211,7 +211,7 @@ class Worker:
 
     # TODO put that function in the subclass
     def run_n_display_steps(self, win, sample=True):
-        action_return_fetches = [self.stochastic_actions if sample else self.greedy_actions, self.critic_value]
+        action_return_fetches = [self.stochastic_actions if sample else self.greedy_actions, self.actor_value]
         predicted_positions_reward_fetches = [self.model_outputs, self.rewards]
         for _ in range(self.sequence_length):
             # get current vision
@@ -391,20 +391,18 @@ class JointAgentWorker(Worker):
             for i, d in enumerate(self.critic_net_dim[1:]):
                 activation_fn = tf.nn.relu if i < len(self.critic_net_dim) - 2 else None
                 prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn, reuse=True)
-            actor_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
+            self.actor_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
         # losses
         constant_gammas = tf.fill(dims=[tf.shape(self.rl_inputs)[0]], value=self.discount_factor)
         increasing_discounted_gammas = tf.cumprod(constant_gammas, reverse=True)
         return_targets = self.return_targets_not_bootstraped + increasing_discounted_gammas * self.critic_value[-1]
         self.critic_losses = (return_targets - self.critic_value) ** 2  # * (1 - increasing_discounted_gammas)
         self.critic_loss = tf.reduce_mean(self.critic_losses, name="critic_loss")
-        self.actor_loss = -tf.reduce_mean(actor_value)
+        self.actor_loss = -tf.reduce_mean(self.actor_value)
         # train ops
         self.global_rl_step = tf.Variable(0, dtype=tf.int32)
         self.global_rl_step_inc = self.global_rl_step.assign_add(1)
         with tf.control_dependencies([self.global_rl_step_inc]):
-            self.critic_train_op = tf.train.AdamOptimizer(1e-3).minimize(self.critic_loss)
-            self.actor_train_op = tf.train.AdamOptimizer(1e-3).minimize(self.actor_loss, var_list=actor_vars)
             self.critic_train_op = tf.train.AdamOptimizer(self.critic_lr).minimize(self.critic_loss)
             self.actor_train_op = tf.train.AdamOptimizer(self.actor_lr).minimize(self.actor_loss, var_list=actor_vars)
         with tf.control_dependencies([self.critic_train_op]):
