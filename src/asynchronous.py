@@ -130,7 +130,7 @@ class Worker:
         self.saver.restore(self.sess, os.path.normpath(path + "/network.ckpt"))
         self.pipe.send("{} variables restored from {}".format(self.name, path))
 
-    def run_reinforcement_learning(self, n_updates, summary_prefix, train_actor=True):
+    def run_reinforcement_learning(self, n_updates, train_actor=True):
         global_rl_step = self.sess.run(self.global_rl_step)
         n_updates += global_rl_step
         while global_rl_step < n_updates - self._n_workers:
@@ -141,7 +141,7 @@ class Worker:
         self.summary_writer.flush()
         self.pipe.send("{} going IDLE".format(self.name))
 
-    def run_all(self, n_updates, summary_prefix, train_actor=True):
+    def run_all(self, n_updates, train_actor=True):
         global_rl_step = self.sess.run(self.global_rl_step)
         n_updates += global_rl_step
         while global_rl_step < n_updates - self._n_workers:
@@ -160,7 +160,7 @@ class Worker:
         self.pipe.recv()  # done
         self.pipe.send("{} (display) going IDLE".format(self.name))
 
-    def run_model(self, n_updates, summary_prefix):
+    def run_model(self, n_updates):
         global_model_step = self.sess.run(self.global_model_step)
         n_updates += global_model_step
         while global_model_step < n_updates - self._n_workers:
@@ -567,21 +567,21 @@ class Experiment:
         while len(self.here_display_pipes) > 0:
             self.set_display_worker_idle()
 
-    def asynchronously_run_model(self, n_updates, summary_prefix):
+    def asynchronously_run_model(self, n_updates):
         for p in self.here_worker_pipes:
-            p.send(("run_model", n_updates, summary_prefix))
-        for p in self.here_worker_pipes:
-            p.recv()
-
-    def asynchronously_run_reinforcement_learning(self, n_updates, summary_prefix, train_actor=True):
-        for p in self.here_worker_pipes:
-            p.send(("run_reinforcement_learning", n_updates, summary_prefix, train_actor))
+            p.send(("run_model", n_updates))
         for p in self.here_worker_pipes:
             p.recv()
 
-    def asynchronously_run_both(self, n_updates, summary_prefix, train_actor=True):
+    def asynchronously_run_reinforcement_learning(self, n_updates, train_actor=True):
         for p in self.here_worker_pipes:
-            p.send(("run_all", n_updates, summary_prefix, train_actor))
+            p.send(("run_reinforcement_learning", n_updates, train_actor))
+        for p in self.here_worker_pipes:
+            p.recv()
+
+    def asynchronously_run_both(self, n_updates, train_actor=True):
+        for p in self.here_worker_pipes:
+            p.send(("run_all", n_updates, train_actor))
         for p in self.here_worker_pipes:
             p.recv()
 
