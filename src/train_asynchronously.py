@@ -177,7 +177,6 @@ else:
     RewardCls = ac.MinimizeJointAgentWorker
     reward_params = {"model_loss_converges_to": 0.043}
 
-args_worker = (args.discount_factor, args.sequence_length, reward_params)
 args_worker = (args.discount_factor, args.sequence_length, reward_params, args.model_lr, args.critic_lr, args.actor_lr)
 
 with ac.Experiment(
