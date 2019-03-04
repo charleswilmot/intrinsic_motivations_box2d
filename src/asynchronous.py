@@ -1,18 +1,16 @@
 import atexit
 import environment
+from replay_buffer import Buffer
 import socket
 import multiprocessing
 import subprocess
 import numpy as np
 from numpy import pi, log
-from numpy.random import normal
-from tempfile import TemporaryDirectory
 import tensorflow as tf
 import tensorflow.contrib.layers as tl
 import time
 import viewer
 import os
-from tensorboard import main as tb
 import filelock
 
 
