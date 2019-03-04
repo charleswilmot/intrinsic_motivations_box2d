@@ -206,9 +206,8 @@ with ac.Experiment(
     else:
         ### stage-wise learning
         for i in range(args.n_stages):
-                summary_prefix = "stage_{}".format(i)
-                experiment.asynchronously_run_model(args.model_stage_length, summary_prefix)
+                experiment.asynchronously_run_model(args.model_stage_length)
                 experiment.save_model("after_model_{}".format(i))
-                experiment.asynchronously_run_reinforcement_learning(args.critic_stage_length, summary_prefix, train_actor=False)
-                experiment.asynchronously_run_reinforcement_learning(args.actor_stage_length, summary_prefix, train_actor=True)
+                experiment.asynchronously_run_reinforcement_learning(args.critic_stage_length, train_actor=False)
+                experiment.asynchronously_run_reinforcement_learning(args.actor_stage_length, train_actor=True)
                 experiment.save_model("after_rl_{}".format(i))
