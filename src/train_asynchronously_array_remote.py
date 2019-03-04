@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #SBATCH --partition sleuths
 #SBATCH --cpus-per-task 16
-#SBATCH --mem=16000
+#SBATCH --mem=25000
 #SBATCH --output=/dev/null
 
 
@@ -14,7 +14,7 @@ try:
     array_id = int(os.environ["SLURM_ARRAY_TASK_ID"])
 except:
     array_id = -1
-array_path = "../experiments/array_df_085_target_0035_continous_mlr_netdim_600/"
+array_path = "../experiments/simple_policy_gradient/target_0035_df_085_mlr_1e-5_search_clr_alr/"
 slurm_log_path = "{}/log_array_id_{}.log".format(array_path, array_id)
 
 
@@ -72,6 +72,10 @@ def format_reward_params(*reward_param):
     return s[:-1]
 
 
+def format_discount_factor(df):
+    return "{:03d}".format(int(df * 1000) // 10)
+
+
 def array_wrt_training_type():
     commands, paths = [], []
     for continuous in [True, False]:
@@ -120,6 +124,7 @@ def array_wrt_learning_rates():
             args_dict["--continuous"] = 5000
             args_dict["-clr"] = clr
             args_dict["-alr"] = alr
+            args_dict["-mlr"] = 1e-5
             commands.append(make_command(path, args_dict))
             paths.append(path)
     return commands, path
@@ -145,12 +150,64 @@ def array_wrt_model_learning_rates():
     return commands, path
 
 
-# commands, paths = array_wrt_training_type()
-commands, paths = array_wrt_model_learning_rates()
+def array_test_targets():
+    commands, paths = [], []
+    for reward_type, reward_param in [("--target-pred-err", [0.010]),
+                                      ("--target-pred-err", [0.015]),
+                                      ("--target-pred-err", [0.020]),
+                                      ("--target-pred-err", [0.025]),
+                                      ("--target-pred-err", [0.030]),
+                                      ("--target-pred-err", [0.035]),
+                                      ("--target-pred-err", [0.040]),
+                                      ("--target-pred-err", [0.045]),
+                                      ("--target-pred-err", [0.050])]:
+        path = array_path + "/{}_{}".format(
+            format_reward_type(reward_type),
+            format_reward_params(*reward_param))
+        args_dict = {}
+        args_dict[reward_type] = reward_param
+        args_dict["-df"] = 0.85
+        args_dict["-nw"] = 32
+        args_dict["-np"] = 2
+        args_dict["--continuous"] = 5000
+        args_dict["-sl"] = 256
+        args_dict["-clr"] = 1e-3
+        args_dict["-mlr"] = 1e-5
+        args_dict["-alr"] = 1e-5
+        commands.append(make_command(path, args_dict))
+        paths.append(path)
+    return commands, paths
+
+
+def array_standard_experiments():
+    commands, paths = [], []
+    for df in [0, 0.5, 0.85]:
+        for reward_type, reward_param in [("--minimize-pred-err", [0.042]),
+                                          ("--target-pred-err", [0.015]),
+                                          ("--target-pred-err", [0.035])]:
+            path = array_path + "/{}_{}_{}".format(
+                format_reward_type(reward_type),
+                format_reward_params(*reward_param),
+                format_discount_factor(df))
+            args_dict = {}
+            args_dict[reward_type] = reward_param
+            args_dict["-df"] = df
+            args_dict["-nw"] = 32
+            args_dict["-np"] = 2
+            args_dict["--continuous"] = 20000
+            args_dict["-sl"] = 256
+            args_dict["-clr"] = 1e-3
+            args_dict["-mlr"] = 1e-5
+            args_dict["-alr"] = 1e-5
+            commands.append(make_command(path, args_dict))
+            paths.append(path)
+    return commands, paths
+
+
+commands, paths = array_wrt_learning_rates()
 if array_id < len(commands):
     cmd = commands[array_id]
     experiment_path = paths[array_id]
     print("array ID = {}\t\t{}".format(array_id, cmd))
-    # time.sleep(2 * (array_id % 30))
     os.system(cmd)
-    os.rename(slurm_log_path, experiment_path + "/out.txt")
+    # os.rename(slurm_log_path, experiment_path + "/out.txt")
