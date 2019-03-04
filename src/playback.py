@@ -102,7 +102,7 @@ else:
 # get the environment parameters
 with open(args.environment_conf, "rb") as f:
     args_env = pickle.load(f)
-args_worker = (args.discount_factor, SEQUENCE_LENGTH, reward_params)
+args_worker = (args.discount_factor, SEQUENCE_LENGTH, reward_params, 0, 0, 0)
 
 models = [x for x in os.listdir(args.path) if os.path.isdir(args.path + "/" + x)]
 initial = [x for x in models if re.match("initial", x)]
