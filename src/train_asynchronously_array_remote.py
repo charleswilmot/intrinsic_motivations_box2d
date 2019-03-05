@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 #SBATCH --partition sleuths
 #SBATCH --cpus-per-task 16
-#SBATCH --mem=25000
+#SBATCH --mem=32000
 #SBATCH --output=/dev/null
 
 
@@ -14,7 +14,7 @@ try:
     array_id = int(os.environ["SLURM_ARRAY_TASK_ID"])
 except:
     array_id = -1
-array_path = "../experiments/simple_policy_gradient/target_0035_df_085_mlr_1e-5_search_clr_alr/"
+array_path = "../experiments/simple_policy_gradient/target_0035_df_085_mlr_1e-5_wrt_buffer_size_2/"
 slurm_log_path = "{}/log_array_id_{}.log".format(array_path, array_id)
 
 
@@ -194,7 +194,7 @@ def array_standard_experiments():
             args_dict["-df"] = df
             args_dict["-nw"] = 32
             args_dict["-np"] = 2
-            args_dict["--continuous"] = 20000
+            args_dict["--continuous"] = 5000
             args_dict["-sl"] = 256
             args_dict["-clr"] = 1e-3
             args_dict["-mlr"] = 1e-5
@@ -204,7 +204,27 @@ def array_standard_experiments():
     return commands, paths
 
 
-commands, paths = array_wrt_learning_rates()
+def array_wrt_buffer_size():
+    commands, paths = [], []
+    for mbs in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]:
+        path = array_path + "/{}".format(mbs)
+        args_dict = {}
+        args_dict["--target-pred-err"] = [0.035]
+        args_dict["-df"] = 0.85
+        args_dict["-nw"] = 32
+        args_dict["-np"] = 2
+        args_dict["--continuous"] = 5000
+        args_dict["-sl"] = 256
+        args_dict["-clr"] = 1e-3
+        args_dict["-mlr"] = 1e-5
+        args_dict["-alr"] = 1e-5
+        args_dict["-mbs"] = mbs
+        commands.append(make_command(path, args_dict))
+        paths.append(path)
+    return commands, paths
+
+
+commands, paths = array_wrt_buffer_size()
 if array_id < len(commands):
     cmd = commands[array_id]
     experiment_path = paths[array_id]
