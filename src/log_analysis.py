@@ -133,25 +133,26 @@ def group_parameters_by(parameters, key):
     return groups
 
 
-def generate_all_plots(data, regenerate=False):
+def generate_all_plots(data, regenerate=False, keys=None):
     print("Generating experiment plots:")
     fig = plt.figure(figsize=(20, 2), dpi=200)
     fig.subplots_adjust(hspace=0.8, wspace=0.8)
     for i, path in enumerate(sorted(data)):
         print("{} / {}\t\t{}".format(i, len(data), path))
-        generate_experiment_plots(fig, path + "/plots/", data[path], regenerate=regenerate)
+        generate_experiment_plots(fig, path + "/plots/", data[path], regenerate=regenerate, keys=keys)
     plt.close(fig)
 
 
-def generate_experiment_plots(fig, path, data, regenerate=False):
+def generate_experiment_plots(fig, path, data, regenerate=False, keys=None):
     if regenerate and os.path.exists(path):
         shutil.rmtree(path)
     if not os.path.exists(path):
         os.mkdir(path)
     for key in sorted(data):
-        print("\t\t{}".format(key))
-        filepath = path + "/{}.png".format(key)
-        generate_sub_experiment_plot(fig, filepath, data[key], regenerate=regenerate)
+        if keys is None or key in keys:
+            print("\t\t{}".format(key))
+            filepath = path + "/{}.png".format(key)
+            generate_sub_experiment_plot(fig, filepath, data[key], regenerate=regenerate)
 
 
 def generate_sub_experiment_plot(fig, filepath, data, regenerate=False, smooth_param=50):
@@ -159,10 +160,10 @@ def generate_sub_experiment_plot(fig, filepath, data, regenerate=False, smooth_p
         for i, key in enumerate(sorted(data)):
             print("\t\t\t{}".format(key))
             smooth_data = smoothen(data[key], smooth_param)
-            ax = fig.add_subplot(1, 9, i + 1)
+            ax = fig.add_subplot(1, len(data), i + 1)
             plot_stats(ax, *smooth_data)
             ax.set_title(key.replace("_", " "), fontsize=10)
-        fig.savefig(filepath, bbox_inches='tight')
+        fig.savefig(filepath) #, bbox_inches='tight')
         fig.clear()
 
 
@@ -175,16 +176,17 @@ class TexFile(tex.base_classes.Container):
             f.write(self.dumps())
 
 
-def generate_all_experiment_tex_files(data):
+def generate_all_experiment_tex_files(data, keys=None):
     print("Generating experiments LaTeX files:")
     for i, path in enumerate(sorted(data)):
         print("{} / {}\t\t{}".format(i, len(data), path))
         texfile = TexFile()
         for key in sorted(data[path]):
-            with texfile.create(tex.Figure(position='!ht')) as plot_figure:
-                image_path = os.path.abspath(path + "plots/{}.png".format(key))
-                plot_figure.add_image(image_path, width=tex.utils.NoEscape('\linewidth'))
-                plot_figure.add_caption(key.replace("_", " "))
+            if keys is None or key in keys:
+                with texfile.create(tex.Figure(position='!ht')) as plot_figure:
+                    image_path = os.path.abspath(path + "plots/{}.png".format(key))
+                    plot_figure.add_image(image_path, width=tex.utils.NoEscape('\linewidth'))
+                    plot_figure.add_caption(key.replace("_", " "))
         texfile.generate_latex(path + "/experiment.tex")
 
 
@@ -265,12 +267,12 @@ class ArraySummary(tex.Document):
 
 
 # generate_latex("../experiments/array_no_entropy_reg", regenerate_plots=False)
-path_to_array = "../experiments/simple_policy_gradient/target_0035_df_085_mlr_1e-5_search_clr_alr/"
-data = load_data(path_to_data_in=path_to_array + "data.pkl")
-# data = load_data(path_to_exps=path_to_array + "*/",
-#                  path_to_data_out=path_to_array + "data.pkl")
-generate_all_plots(data, regenerate=False)
-generate_all_experiment_tex_files(data)
+path_to_array = "../experiments/simple_policy_gradient/target_0035_df_085_mlr_1e-5_wrt_buffer_size_2/"
+# data = load_data(path_to_data_in=path_to_array + "data.pkl")
+data = load_data(path_to_exps=path_to_array + "*/",
+                 path_to_data_out=path_to_array + "data.pkl")
+generate_all_plots(data, regenerate=False, keys=["model", "rl"])
+generate_all_experiment_tex_files(data, keys=["model", "rl"])
 parameters = load_parameters(path_to_array + "*/")
 
 
@@ -315,6 +317,10 @@ def by_discount_factor(x):
     return "{}".format(x["discount_factor"])
 
 
+def by_buffer_size(x):
+    return int(x["model_buffer_size"])
+
+
 def by_nothing(x):
     return " "
 
@@ -331,8 +337,12 @@ def get_std_end_reward(data):
     return "{:.3f}".format(np.std(data["rl"]["reward"][1][LOOKBACK_START:LOOKBACK_END]))
 
 
-def get_mean_end_loss(data):
+def get_mean_end_loss_at_rl(data):
     return "{:.3f}".format(np.mean(data["rl"]["loss"][1][LOOKBACK_START:LOOKBACK_END]))
+
+
+def get_mean_end_loss_at_model(data):
+    return "{:.3f}".format(np.mean(data["model"]["loss"][1][LOOKBACK_START:LOOKBACK_END]))
 
 
 def get_std_end_loss(data):
@@ -379,7 +389,7 @@ def learning_rates():
         arrsum.add_tabular(get_tab_data(data, parameters, by_clr, by_alr, get_mean_critic_q, name="critic quality"))
         arrsum.add_tabular(get_tab_data(data, parameters, by_clr, by_alr, get_mean_end_reward, name="mean reward"))
         arrsum.add_tabular(get_tab_data(data, parameters, by_clr, by_alr, get_std_end_reward, name="std reward"))
-        arrsum.add_tabular(get_tab_data(data, parameters, by_clr, by_alr, get_mean_end_loss, name="mean loss"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_clr, by_alr, get_mean_end_loss_at_rl, name="mean loss"))
         arrsum.add_tabular(get_tab_data(data, parameters, by_clr, by_alr, get_std_end_loss, name="std loss"))
     grouped_by_clr = group_parameters_by(parameters, by_clr)
     for clr in sorted(grouped_by_clr):
@@ -398,7 +408,7 @@ def model_learning_rates():
         arrsum.add_tabular(get_tab_data(data, parameters, by_mlr, by_nothing, get_mean_critic_q, name="critic quality"))
         arrsum.add_tabular(get_tab_data(data, parameters, by_mlr, by_nothing, get_mean_end_reward, name="mean reward"))
         arrsum.add_tabular(get_tab_data(data, parameters, by_mlr, by_nothing, get_std_end_reward, name="std reward"))
-        arrsum.add_tabular(get_tab_data(data, parameters, by_mlr, by_nothing, get_mean_end_loss, name="mean loss"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_mlr, by_nothing, get_mean_end_loss_at_rl, name="mean loss"))
         arrsum.add_tabular(get_tab_data(data, parameters, by_mlr, by_nothing, get_std_end_loss, name="std loss"))
     grouped_by_mlr = group_parameters_by(parameters, by_mlr)
     for mlr in sorted(grouped_by_mlr):
@@ -415,7 +425,7 @@ def model_target():
         arrsum.add_tabular(get_tab_data(data, parameters, by_nothing, by_reward_type_and_param, get_mean_critic_q, name="critic quality"))
         arrsum.add_tabular(get_tab_data(data, parameters, by_nothing, by_reward_type_and_param, get_mean_end_reward, name="mean reward"))
         arrsum.add_tabular(get_tab_data(data, parameters, by_nothing, by_reward_type_and_param, get_std_end_reward, name="std reward"))
-        arrsum.add_tabular(get_tab_data(data, parameters, by_nothing, by_reward_type_and_param, get_mean_end_loss, name="mean loss"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_nothing, by_reward_type_and_param, get_mean_end_loss_at_rl, name="mean loss"))
         arrsum.add_tabular(get_tab_data(data, parameters, by_nothing, by_reward_type_and_param, get_std_end_loss, name="std loss"))
     grouped_by_target = group_parameters_by(parameters, by_reward_type_and_param)
     for target in sorted(grouped_by_target):
@@ -432,7 +442,7 @@ def standards_experiments():
         arrsum.add_tabular(get_tab_data(data, parameters, by_reward_type_and_param, by_discount_factor, get_mean_critic_q, name="critic quality"))
         arrsum.add_tabular(get_tab_data(data, parameters, by_reward_type_and_param, by_discount_factor, get_mean_end_reward, name="mean reward"))
         arrsum.add_tabular(get_tab_data(data, parameters, by_reward_type_and_param, by_discount_factor, get_std_end_reward, name="std reward"))
-        arrsum.add_tabular(get_tab_data(data, parameters, by_reward_type_and_param, by_discount_factor, get_mean_end_loss, name="mean loss"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_reward_type_and_param, by_discount_factor, get_mean_end_loss_at_rl, name="mean loss"))
         arrsum.add_tabular(get_tab_data(data, parameters, by_reward_type_and_param, by_discount_factor, get_std_end_loss, name="std loss"))
     grouped_by_type = group_parameters_by(parameters, by_reward_type_and_param)
     for exp_type in sorted(grouped_by_type):
@@ -443,4 +453,22 @@ def standards_experiments():
     arrsum.generate_pdf(filepath=path_to_array + "new_impl", clean_tex=False)
 
 
-learning_rates()
+def array_wrt_buffer_size():
+    arrsum = ArraySummary("WRT buffer size")
+    with arrsum.create(tex.Section("Overview")):
+        arrsum.add_tabular(get_tab_data(data, parameters, by_nothing, by_buffer_size, get_mean_critic_q, name="critic quality"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_nothing, by_buffer_size, get_mean_end_reward, name="mean reward"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_nothing, by_buffer_size, get_std_end_reward, name="std reward"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_nothing, by_buffer_size, get_mean_end_loss_at_rl, name="mean loss at rl"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_nothing, by_buffer_size, get_mean_end_loss_at_model, name="mean loss at model"))
+        arrsum.add_tabular(get_tab_data(data, parameters, by_nothing, by_buffer_size, get_std_end_loss, name="std loss"))
+    grouped_by_buffer_size = group_parameters_by(parameters, by_buffer_size)
+    for buf_size in sorted(grouped_by_buffer_size):
+        with arrsum.create(tex.Section("{}".format(buf_size))):
+            for p in grouped_by_buffer_size[buf_size]:
+                arrsum.add_experiment(p)
+            arrsum.clearpage()
+    arrsum.generate_pdf(filepath=path_to_array + "new_impl", clean_tex=False)
+
+
+array_wrt_buffer_size()
