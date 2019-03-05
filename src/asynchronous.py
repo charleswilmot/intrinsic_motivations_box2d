@@ -228,6 +228,8 @@ class Worker:
             action_dict = actions_dict_from_array(action)
             self.env.set_positions(action_dict)
             self.env.env_step()
+            # get target positions
+            target_positions = self.env.discrete_target_positions
             # get current positions
             next_positions = self.env.discrete_positions
             # get predicted positions and reward
@@ -237,7 +239,7 @@ class Worker:
             current_reward = current_rewards[0]
             predicted_positions = predicted_positions[0].reshape((4, -1))
             # display
-            win(vision, current_positions, predicted_positions, next_positions, current_reward, predicted_return)
+            win(vision, current_positions, target_positions, predicted_positions, next_positions, current_reward, predicted_return)
 
     def rewards_to_return(self, rewards, prev_return=0):
         returns = np.zeros_like(rewards)

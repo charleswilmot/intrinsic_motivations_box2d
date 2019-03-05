@@ -252,10 +252,11 @@ class DiscreteJointPositionIAX:
         self._axes_initialized = False
         self._title = title
 
-    def __initaxes__(self, position, target, prev):
-        self._position_line, = self.ax.plot(position, "o-")
-        self._target_line, = self.ax.plot(target, "o-")
-        self._prev_line, = self.ax.plot(prev, "--", alpha=0.6)
+    def __initaxes__(self, predicted_position, next_position, current_position, target_position):
+        self._predicted_line, = self.ax.plot(predicted_position, "o-")
+        self._next_line, = self.ax.plot(next_position, "o-")
+        self._current_line, = self.ax.plot(current_position, "k--", alpha=0.6)
+        self._target_line, = self.ax.plot(target_position, "r--", alpha=0.6)
         self.ax.set_ylim(*self._lim)
         self.ax.axes.get_xaxis().set_ticks([])
         self.ax.axes.get_yaxis().set_ticks([])
@@ -270,13 +271,14 @@ class DiscreteJointPositionIAX:
         if self._axes_initialized:
             self.ax.set_ylim(*lim)
 
-    def __call__(self, position, target, prev):
+    def __call__(self, predicted_position, next_position, current_position, target_position):
         if self._axes_initialized:
-            self._position_line.set_ydata(position)
-            self._target_line.set_ydata(target)
-            self._prev_line.set_ydata(prev)
+            self._predicted_line.set_ydata(predicted_position)
+            self._next_line.set_ydata(next_position)
+            self._current_line.set_ydata(current_position)
+            self._target_line.set_ydata(target_position)
         else:
-            self.__initaxes__(position, target, prev)
+            self.__initaxes__(predicted_position, next_position, current_position, target_position)
 
 
 class DoubleVisionWindow:
@@ -500,11 +502,13 @@ class JointAgentWindow:
         for iax in self.iax_joints:
             iax.set_lim(*lim)
 
-    def __call__(self, vision, current_positions, predicted_positions, next_positions, current_reward, predicted_return):
+    def __call__(self, vision, current_positions, target_positions, predicted_positions,
+                 next_positions, current_reward, predicted_return):
         self.iax_vision(vision)
         self.iax_return(current_reward, predicted_return)
-        for position, target, prev, iax in zip(predicted_positions, next_positions, current_positions, self.iax_joints):
-            iax(position, target, prev)
+        for predicted_position, next_position, current_position, target_position, iax in \
+                zip(predicted_positions, next_positions, current_positions, target_positions, self.iax_joints):
+            iax(predicted_position, next_position, current_position, target_position)
         if self._fig_shawn:
             self.fig.canvas.draw()
             self.fig.canvas.flush_events()
