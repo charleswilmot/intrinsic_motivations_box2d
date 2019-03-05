@@ -51,7 +51,7 @@ def get_available_port(start_port=6006):
 
 class Worker:
     def __init__(self, task_index, pipe, env, cluster, logdir, discount_factor, sequence_length, reward_params,
-                 model_lr, critic_lr, actor_lr):
+                 model_lr, critic_lr, actor_lr, model_buffer_size):
         self.task_index = task_index
         self.cluster = cluster
         self._n_workers = self.cluster.num_tasks("worker") - 1
@@ -66,6 +66,7 @@ class Worker:
         self.model_lr = model_lr
         self.critic_lr = critic_lr
         self.actor_lr = actor_lr
+        self.model_buffer_size = model_buffer_size
         self.pipe = pipe
         self.define_networks()
         self.logdir = logdir
@@ -231,7 +232,7 @@ class Worker:
             next_positions = self.env.discrete_positions
             # get predicted positions and reward
             model_states.append(self.get_model_state())
-            model_feed_dict = self.to_model_feed_dict(states=model_states, targets=True)
+            model_feed_dict = self.to_model_feed_dict(states=model_states[:-1], next_states=model_states[1:])
             predicted_positions, current_rewards = self.sess.run(predicted_positions_reward_fetches, feed_dict=model_feed_dict)
             current_reward = current_rewards[0]
             predicted_positions = predicted_positions[0].reshape((4, -1))
@@ -247,7 +248,7 @@ class Worker:
         return returns
 
     def update_reinforcement_learning(self, model_states, rl_states, actions, train_actor=True):
-        feed_dict = self.to_model_feed_dict(states=model_states, targets=True)
+        feed_dict = self.to_model_feed_dict(states=model_states[:-1], next_states=model_states[1:])
         rewards, model_summary = self.sess.run([self.rewards, self.model_summary_at_rl], feed_dict=feed_dict)
         feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards)
         train_op = self.rl_train_op if train_actor else self.critic_train_op
@@ -262,7 +263,9 @@ class Worker:
         return global_rl_step
 
     def update_model(self, states):
-        feed_dict = self.to_model_feed_dict(states=states, targets=True)
+        self.model_buffer.incorporate(states[:-1], states[1:])
+        states, next_states = self.model_buffer.batch(len(states) - 1)
+        feed_dict = self.to_model_feed_dict(states=states, next_states=next_states)
         fetches = [self.model_loss, self.global_model_step_inc, self.model_train_op, self.model_summary]
         loss, global_model_step, _, model_summary = self.sess.run(fetches, feed_dict=feed_dict)
         self.summary_writer.add_summary(model_summary, global_step=global_model_step)
@@ -272,14 +275,22 @@ class Worker:
         return global_model_step
 
     def update_all(self, model_states, rl_states, actions, train_actor=True):
-        feed_dict = self.to_model_feed_dict(states=model_states, targets=True)
-        fetches = [self.rewards, self.model_loss, self.model_train_op, self.model_summary_at_rl, self.global_rl_step]
-        rewards, mloss, _, model_summary, global_rl_step = self.sess.run(fetches, feed_dict=feed_dict)
+        # train model with buffered data
+        self.model_buffer.incorporate(model_states[:-1], model_states[1:])
+        states, next_states = self.model_buffer.batch(len(model_states) - 1)
+        fetches = [self.model_train_op, self.model_summary, self.global_rl_step]
+        feed_dict = self.to_model_feed_dict(states=states, next_states=next_states)
+        _, model_summary, global_rl_step = self.sess.run(fetches, feed_dict=feed_dict)
+        self.summary_writer.add_summary(model_summary, global_step=global_rl_step)
+        # record reward / model loss at rl time
+        feed_dict = self.to_model_feed_dict(states=model_states[:-1], next_states=model_states[1:])
+        fetches = [self.rewards, self.model_loss, self.model_summary_at_rl]
+        rewards, mloss, model_summary = self.sess.run(fetches, feed_dict=feed_dict)
         self.summary_writer.add_summary(model_summary, global_step=global_rl_step)
         feed_dict = self.to_rl_feed_dict(states=rl_states, actions=actions, rewards=rewards)
         train_op = self.rl_train_op if train_actor else self.critic_train_op
         fetches = [self.actor_loss, self.critic_loss, self.global_rl_step_inc, train_op, self.rl_summary]
-        aloss, closs, global_rl_step, _, rl_summary = self.sess.run(fetches, feed_dict=feed_dict)
+        aloss, closs, global_rl_step_inc, _, rl_summary = self.sess.run(fetches, feed_dict=feed_dict)
         self.summary_writer.add_summary(rl_summary, global_step=global_rl_step)
         if global_rl_step % 100 <= self._n_workers:
             self.summary_writer.flush()
@@ -291,6 +302,7 @@ class Worker:
 class JointAgentWorker(Worker):
     def define_networks(self):
         self.define_net_dims()
+        self.define_replay_buffer()
         with tf.device(self.device):
             # define model
             self.define_model()
@@ -299,9 +311,12 @@ class JointAgentWorker(Worker):
 
     def define_net_dims(self):
         self.n_discrete = self.env._n_discrete
-        self.model_net_dim = [self.n_discrete * 3, 600, 600, 600, self.n_discrete]
+        self.model_net_dim = [self.n_discrete * 3 * 4, 600, 600, 600, self.n_discrete]
         self.critic_net_dim = [4 + self.n_discrete * 4 * 2, 600, 1]
-        self.actor_net_dim = [self.n_discrete * 4 * 2, 600, 4]
+        self.actor_net_dim = [self.n_discrete * 2 * 4, 600, 4]
+
+    def define_replay_buffer(self):
+        self.model_buffer = Buffer(shape=(3, 4, self.n_discrete), size=self.model_buffer_size)
 
     def define_model(self):
         #############################
@@ -443,14 +458,12 @@ class JointAgentWorker(Worker):
             feed_dict[self.return_targets_not_bootstraped] = returns
         return feed_dict
 
-    def to_model_feed_dict(self, states, targets=False):
+    def to_model_feed_dict(self, states, next_states=None):
         feed_dict = {}
         np_states = np.array(states)
-        if targets:
-            feed_dict[self.model_inputs] = np_states[:-1]
-            feed_dict[self.model_targets] = np_states[1:, 0]
-        else:
-            feed_dict[self.model_inputs] = np_states
+        feed_dict[self.model_inputs] = np_states
+        if next_states is not None:
+            feed_dict[self.model_targets] = np.array(next_states)[:, 0]
         return feed_dict
 
 

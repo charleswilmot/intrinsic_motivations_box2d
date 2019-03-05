@@ -158,6 +158,15 @@ parser.add_argument(
 )
 
 
+parser.add_argument(
+    '-mbs', '--model-buffer-size',
+    type=int,
+    action='store',
+    help="Model buffer size",
+    default=1
+)
+
+
 args = parser.parse_args()
 with open(args.environment_conf, "rb") as f:
     args_env = pickle.load(f)
@@ -177,7 +186,8 @@ else:
     RewardCls = ac.MinimizeJointAgentWorker
     reward_params = {"model_loss_converges_to": 0.043}
 
-args_worker = (args.discount_factor, args.sequence_length, reward_params, args.model_lr, args.critic_lr, args.actor_lr)
+# args_worker = (args.discount_factor, args.sequence_length, reward_params, args.model_lr, args.critic_lr, args.actor_lr)
+args_worker = (args.discount_factor, args.sequence_length, reward_params, args.model_lr, args.critic_lr, args.actor_lr, args.sequence_length * args.model_buffer_size)
 
 with ac.Experiment(
         args.n_parameter_servers, args.n_workers, RewardCls,
@@ -196,7 +206,7 @@ with ac.Experiment(
     if args.continuous:
         ### continuous learning
         done = 0
-        save_every = 500
+        save_every = min(args.continuous, 20000)
         i = 0
         while done < args.continuous:
             experiment.asynchronously_run_both(save_every, "continuous")
