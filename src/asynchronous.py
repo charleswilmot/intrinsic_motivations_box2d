@@ -467,6 +467,80 @@ class JointAgentWorker(Worker):
         return feed_dict
 
 
+class PEEJointAgentWorker(JointAgentWorker):
+    def define_net_dims(self):
+        self.n_discrete = self.env._n_discrete
+        self.model_net_dim = [self.n_discrete * 3 * 4, 600, 600, 600, self.n_discrete]
+        self.pee_model_net_dim = [self.n_discrete * 3 * 4, 600, 1]
+        self.critic_net_dim = [4 + self.n_discrete * 4 * 2, 600, 1]
+        self.actor_net_dim = [self.n_discrete * 2 * 4, 600, 4]
+
+    def define_model(self):
+        #############################
+        # MUST DEFINE : #############
+        #############################
+        # self.model_outputs
+        # self.rewards
+        # self.model_loss
+        # self.model_losses
+        # self.global_model_step
+        # self.model_train_op
+        # self.model_summary
+        # self.model_summary_at_rl_time   --> missing in current ipl, TODO  --> useless ?
+        # PLACEHOLDERS : ############
+        # self.model_inputs
+        # self.model_targets
+        #############################
+        net_dim = self.model_net_dim
+        self.model_inputs = tf.placeholder(shape=[None, 3, 4, self.n_discrete], dtype=tf.float32, name="model_inputs")
+        self.model_targets = tf.placeholder(shape=[None, 4, self.n_discrete], dtype=tf.float32, name="model_targets")
+        splited_model_inputs = [tf.reshape(x, (-1, 3 * self.n_discrete)) for x in tf.unstack(self.model_inputs, 4, axis=2)]
+        splited_model_targets = tf.unstack(self.model_targets, 4, axis=1)
+        splited_model_outputs = []
+        with tf.variable_scope("model"):
+            for joint_id, inp in enumerate(splited_model_inputs):
+                prev_layer = inp
+                for i, d in enumerate(net_dim[1:]):
+                    activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
+                    prev_layer = tl.fully_connected(prev_layer, d, scope="joint{}_layer{}".format(joint_id, i), activation_fn=activation_fn)
+                splited_model_outputs.append(prev_layer)
+        net_dim = self.pee_model_net_dim
+        splited_pee_model_outputs = []
+        with tf.variable_scope("pee_model"):
+            for joint_id, inp in enumerate(splited_model_inputs):
+                prev_layer = inp
+                for i, d in enumerate(net_dim[1:]):
+                    activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
+                    prev_layer = tl.fully_connected(prev_layer, d, scope="joint{}_layer{}".format(joint_id, i), activation_fn=activation_fn)
+                splited_pee_model_outputs.append(prev_layer)
+
+        self.pee_model_outputs = tf.concat(splited_pee_model_outputs, axis=1)                              # [BS, 4]
+        self.model_outputs = tf.stack(splited_model_outputs, axis=1)                                       # [BS, 4, ND]
+        per_joint_model_losses = tf.reduce_mean((self.model_outputs - self.model_targets) ** 2, axis=-1)   # [BS, 4]
+        self.model_losses = tf.reduce_mean(per_joint_model_losses, axis=-1)                                # [BS]
+        self.model_loss = tf.reduce_mean(self.model_losses, name="loss")                                   # []
+        self.pee_model_losses = tf.reduce_mean((per_joint_model_losses - self.pee_model_outputs) ** 2, axis=-1)  # [BS]
+        self.pee_model_loss = tf.reduce_mean(self.pee_model_losses, name="pee_loss")                       # []
+        self.define_reward(**self.reward_params)
+        self.global_model_step = tf.Variable(0, dtype=tf.int32)
+        self.global_model_step_inc = self.global_model_step.assign_add(1)
+        # optimizer / summary
+        self.model_optimizer = tf.train.AdamOptimizer(self.model_lr)
+        self.model_train_op = self.model_optimizer.minimize(self.model_loss + self.pee_model_loss)
+        sum_model_loss = tf.summary.scalar("/model/loss", self.model_losses[0])
+        sum_model_pee_loss = tf.summary.scalar("/model/pee_loss", self.pee_model_losses[0])
+        sum_model_reward = tf.summary.scalar("/model/reward", self.rewards[0])
+        self.model_summary = tf.summary.merge([sum_model_loss, sum_model_reward, sum_model_pee_loss])
+        sum_model_loss_at_rl = tf.summary.scalar("/rl/loss", self.model_losses[0])
+        sum_model_pee_loss_at_rl = tf.summary.scalar("/rl/pee_loss", self.pee_model_losses[0])
+        sum_model_reward_at_rl = tf.summary.scalar("/rl/reward", self.rewards[0])
+        self.model_summary_at_rl = tf.summary.merge([sum_model_loss_at_rl, sum_model_reward_at_rl, sum_model_pee_loss_at_rl])
+
+    def define_reward(self, pee_model_loss_converges_to):
+        reward_scale = (1 - self.discount_factor) / pee_model_loss_converges_to
+        self.rewards = reward_scale * self.pee_model_losses
+
+
 class MinimizeJointAgentWorker(JointAgentWorker):
     def define_reward(self, model_loss_converges_to):
         reward_scale = (1 - self.discount_factor) / model_loss_converges_to

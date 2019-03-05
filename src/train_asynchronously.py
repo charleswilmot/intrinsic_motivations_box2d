@@ -134,6 +134,14 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    '--pred-err-err',
+    type=float,
+    action='store',
+    help="Reward type. Pass the 'pee_model_loss_converges_to' params",
+    default=None
+)
+
+parser.add_argument(
     '-mlr', '--model-lr',
     type=float,
     action='store',
@@ -182,6 +190,9 @@ elif args.target_pred_err is not None:
 elif args.range_pred_err is not None:
     RewardCls = ac.RangeErrorJointAgentWorker
     reward_params = {"range_mini": args.range_pred_err[0], "range_maxi": args.range_pred_err[1]}
+elif args.pred_err_err is not None:
+    RewardCls = ac.PEEJointAgentWorker
+    reward_params = {"pee_model_loss_converges_to": args.pred_err_err}
 else:
     RewardCls = ac.MinimizeJointAgentWorker
     reward_params = {"model_loss_converges_to": 0.043}
