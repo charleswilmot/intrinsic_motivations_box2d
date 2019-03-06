@@ -113,6 +113,7 @@ class Environment(object):
                         pos = max_lim - threshold * threshold / (pos + 2 * threshold - max_lim)
                 self._buf_target_positions[i] = pos
                 self.joint_pids[key].setpoint = pos
+        self._computed_discrete_target_positions = False
 
     def step(self):
         for key in self._joints_in_position_mode:
