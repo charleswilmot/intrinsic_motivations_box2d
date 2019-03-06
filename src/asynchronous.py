@@ -318,13 +318,53 @@ class JointAgentWorker(Worker):
             self.define_reinforcement_learning()
 
     def define_net_dims(self):
-        self.n_discrete = self.env._n_discrete
-        self.model_net_dim = [self.n_discrete * 3 * 4, 600, 600, 600, self.n_discrete]
-        self.critic_net_dim = [4 + self.n_discrete * 4 * 2, 600, 1]
-        self.actor_net_dim = [self.n_discrete * 2 * 4, 600, 4]
+        self.define_model_net_dim()
+        self.define_rl_net_dim()
+
+    def define_model_net_dim(self):
+        raise NotImplementedError("This methode must be overwritten")
+
+    def define_rl_net_dim(self):
+        raise NotImplementedError("This methode must be overwritten")
 
     def define_replay_buffer(self):
         self.model_buffer = Buffer(shape=(3, 4, self.n_discrete), size=self.model_buffer_size)
+
+    def get_model_state(self):
+        return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
+
+    def get_rl_state(self):
+        return self.env.discrete_positions, self.env.discrete_speeds
+
+    def to_rl_feed_dict(self, states=None, actions=None, rewards=None):
+        # transforms the inputs into a feed dict for the actor
+        feed_dict = {}
+        if states is not None:
+            np_rl_states = np.array(states)
+            new_shape = (-1, np.prod(np_rl_states.shape[1:]))
+            feed_dict[self.rl_inputs] = np.reshape(np_rl_states, new_shape)
+        if actions is not None:
+            np_actions = np.array(actions)
+            feed_dict[self.actions] = np_actions
+        if rewards is not None:
+            # reverse pass through the rewards here...
+            returns = self.rewards_to_return(rewards)
+            feed_dict[self.return_targets_not_bootstraped] = returns
+        return feed_dict
+
+    def to_model_feed_dict(self, states, next_states=None):
+        feed_dict = {}
+        np_states = np.array(states)
+        feed_dict[self.model_inputs] = np_states
+        if next_states is not None:
+            feed_dict[self.model_targets] = np.array(next_states)[:, 0]
+        return feed_dict
+
+
+class PEJointAgentWorker(JointAgentWorker):
+    def define_model_net_dim(self):
+        self.n_discrete = self.env._n_discrete
+        self.model_net_dim = [self.n_discrete * 3 * 4, 600, 600, 600, self.n_discrete]
 
     def define_model(self):
         #############################
@@ -370,6 +410,12 @@ class JointAgentWorker(Worker):
         sum_model_loss_at_rl = tf.summary.scalar("/rl/loss", self.model_losses[0])
         sum_model_reward_at_rl = tf.summary.scalar("/rl/reward", self.rewards[0])
         self.model_summary_at_rl = tf.summary.merge([sum_model_loss_at_rl, sum_model_reward_at_rl])
+
+
+class DPGJointAgentWorker(JointAgentWorker):
+    def define_rl_net_dim(self):
+        self.critic_net_dim = [4 + self.n_discrete * 4 * 2, 600, 1]
+        self.actor_net_dim = [self.n_discrete * 2 * 4, 600, 4]
 
     def define_reinforcement_learning(self):
         #############################
@@ -444,44 +490,12 @@ class JointAgentWorker(Worker):
             grad_summaries.append(grad_summary)
         self.rl_summary = tf.summary.merge([sum_actor_loss, sum_critic_loss, sum_critic_quality, grad_summaries, action_summaries])
 
-    def get_model_state(self):
-        return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
-
-    def get_rl_state(self):
-        return self.env.discrete_positions, self.env.discrete_speeds
-
-    def to_rl_feed_dict(self, states=None, actions=None, rewards=None):
-        # transforms the inputs into a feed dict for the actor
-        feed_dict = {}
-        if states is not None:
-            np_rl_states = np.array(states)
-            new_shape = (-1, np.prod(np_rl_states.shape[1:]))
-            feed_dict[self.rl_inputs] = np.reshape(np_rl_states, new_shape)
-        if actions is not None:
-            np_actions = np.array(actions)
-            feed_dict[self.actions] = np_actions
-        if rewards is not None:
-            # reverse pass through the rewards here...
-            returns = self.rewards_to_return(rewards)
-            feed_dict[self.return_targets_not_bootstraped] = returns
-        return feed_dict
-
-    def to_model_feed_dict(self, states, next_states=None):
-        feed_dict = {}
-        np_states = np.array(states)
-        feed_dict[self.model_inputs] = np_states
-        if next_states is not None:
-            feed_dict[self.model_targets] = np.array(next_states)[:, 0]
-        return feed_dict
-
 
 class PEEJointAgentWorker(JointAgentWorker):
-    def define_net_dims(self):
+    def define_model_net_dim(self):
         self.n_discrete = self.env._n_discrete
         self.model_net_dim = [self.n_discrete * 3 * 4, 600, 600, 600, self.n_discrete]
         self.pee_model_net_dim = [self.n_discrete * 3 * 4, 600, 1]
-        self.critic_net_dim = [4 + self.n_discrete * 4 * 2, 600, 1]
-        self.actor_net_dim = [self.n_discrete * 2 * 4, 600, 4]
 
     def define_model(self):
         #############################
@@ -549,24 +563,24 @@ class PEEJointAgentWorker(JointAgentWorker):
         self.rewards = reward_scale * self.pee_model_losses
 
 
-class MinimizeJointAgentWorker(JointAgentWorker):
+class MinimizeJointAgentWorker(PEJointAgentWorker):
     def define_reward(self, model_loss_converges_to):
         reward_scale = (1 - self.discount_factor) / model_loss_converges_to
         self.rewards = - reward_scale * self.model_losses
 
 
-class MaximizeJointAgentWorker(JointAgentWorker):
+class MaximizeJointAgentWorker(PEJointAgentWorker):
     def define_reward(self, model_loss_converges_to):
         reward_scale = (1 - self.discount_factor) / model_loss_converges_to
         self.rewards = reward_scale * self.model_losses
 
 
-class TargetErrorJointAgentWorker(JointAgentWorker):
+class TargetErrorJointAgentWorker(PEJointAgentWorker):
     def define_reward(self, target_prediction_error):
         self.rewards = -tf.abs(self.model_losses - target_prediction_error) * (1 - self.discount_factor) / 0.04
 
 
-class RangeErrorJointAgentWorker(JointAgentWorker):
+class RangeErrorJointAgentWorker(PEJointAgentWorker):
     def define_reward(self, range_mini, range_maxi):
         mean = (range_maxi + range_mini) / 2
         dist = (range_maxi - range_mini) / 2

@@ -165,13 +165,21 @@ parser.add_argument(
     default=1e-5
 )
 
-
 parser.add_argument(
     '-mbs', '--model-buffer-size',
     type=int,
     action='store',
     help="Model buffer size",
     default=1
+)
+
+parser.add_argument(
+    '-rl', '--rl-algo',
+    type=str,
+    choices=["DPG", "A3C", "dpg", "a3c"],
+    action='store',
+    help="Type of rl algorithm.",
+    default="DPG"
 )
 
 
@@ -197,11 +205,21 @@ else:
     RewardCls = ac.MinimizeJointAgentWorker
     reward_params = {"model_loss_converges_to": 0.043}
 
-# args_worker = (args.discount_factor, args.sequence_length, reward_params, args.model_lr, args.critic_lr, args.actor_lr)
+if args.rl_algo.lower() == "dpg":
+    RLCls = ac.DPGJointAgentWorker
+elif args.rl_algo.lower() == "a3c":
+    raise NotImplementedError("Implement A3C please")
+    RLCls = ac.A3CJointAgentWorker
+else:
+    raise ValueError("Check the  --rl-algo  argument please")
+
+
+WorkerCls = type('WorkerCls', (RewardCls, RLCls), {})
+
 args_worker = (args.discount_factor, args.sequence_length, reward_params, args.model_lr, args.critic_lr, args.actor_lr, args.sequence_length * args.model_buffer_size)
 
 with ac.Experiment(
-        args.n_parameter_servers, args.n_workers, RewardCls,
+        args.n_parameter_servers, args.n_workers, WorkerCls,
         args.path, args_env, args_worker, display_dpi=3) as experiment:
     ### save command line
     with open(args.path + "/cmd.txt", "w") as f:
