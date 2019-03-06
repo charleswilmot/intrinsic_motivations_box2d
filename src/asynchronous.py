@@ -23,6 +23,11 @@ def actions_dict_from_array(actions):
     }
 
 
+def lrelu(x):
+    alpha = 0.2
+    return tf.nn.relu(x) * (1 - alpha) + x * alpha
+
+
 def get_cluster(n_parameter_servers, n_workers):
     spec = {}
     port = get_available_port(2222)
@@ -347,7 +352,7 @@ class JointAgentWorker(Worker):
             for joint_id, inp in enumerate(splited_model_inputs):
                 prev_layer = inp
                 for i, d in enumerate(net_dim[1:]):
-                    activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
+                    activation_fn = lrelu if i < len(net_dim) - 2 else None
                     prev_layer = tl.fully_connected(prev_layer, d, scope="joint{}_layer{}".format(joint_id, i), activation_fn=activation_fn)
                 splited_model_outputs.append(prev_layer)
         self.model_outputs = tf.stack(splited_model_outputs, axis=1)
@@ -391,7 +396,7 @@ class JointAgentWorker(Worker):
         with tf.variable_scope("actor_net"):
             prev_layer = self.rl_inputs
             for i, d in enumerate(self.actor_net_dim[1:]):
-                activation_fn = tf.nn.relu if i < len(self.actor_net_dim) - 2 else None
+                activation_fn = lrelu if i < len(self.actor_net_dim) - 2 else None
                 prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
             self.greedy_actions = prev_layer * 10
             self.stochastic_actions = self.greedy_actions + tf.random_normal(shape=tf.shape(self.greedy_actions), stddev=0.1)
@@ -399,13 +404,13 @@ class JointAgentWorker(Worker):
         with tf.variable_scope("critic_net"):
             prev_layer = tf.concat([self.rl_inputs, self.actions], axis=1)
             for i, d in enumerate(self.critic_net_dim[1:]):
-                activation_fn = tf.nn.relu if i < len(self.critic_net_dim) - 2 else None
+                activation_fn = lrelu if i < len(self.critic_net_dim) - 2 else None
                 prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
             self.critic_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
         with tf.variable_scope("critic_net"):
             prev_layer = tf.concat([self.rl_inputs, self.greedy_actions], axis=1)  # could also add noise (see stochastic)
             for i, d in enumerate(self.critic_net_dim[1:]):
-                activation_fn = tf.nn.relu if i < len(self.critic_net_dim) - 2 else None
+                activation_fn = lrelu if i < len(self.critic_net_dim) - 2 else None
                 prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn, reuse=True)
             self.actor_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
         # losses
@@ -504,7 +509,7 @@ class PEEJointAgentWorker(JointAgentWorker):
             for joint_id, inp in enumerate(splited_model_inputs):
                 prev_layer = inp
                 for i, d in enumerate(net_dim[1:]):
-                    activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
+                    activation_fn = lrelu if i < len(net_dim) - 2 else None
                     prev_layer = tl.fully_connected(prev_layer, d, scope="joint{}_layer{}".format(joint_id, i), activation_fn=activation_fn)
                 splited_model_outputs.append(prev_layer)
         net_dim = self.pee_model_net_dim
@@ -513,7 +518,7 @@ class PEEJointAgentWorker(JointAgentWorker):
             for joint_id, inp in enumerate(splited_model_inputs):
                 prev_layer = inp
                 for i, d in enumerate(net_dim[1:]):
-                    activation_fn = tf.nn.relu if i < len(net_dim) - 2 else None
+                    activation_fn = lrelu if i < len(net_dim) - 2 else None
                     prev_layer = tl.fully_connected(prev_layer, d, scope="joint{}_layer{}".format(joint_id, i), activation_fn=activation_fn)
                 splited_pee_model_outputs.append(prev_layer)
 
