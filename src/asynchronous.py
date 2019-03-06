@@ -181,15 +181,15 @@ class Worker:
         states = []
         actions = []
         for _ in range(self.sequence_length):
-            # get states
-            model_states.append(self.get_model_state())
-            states.append(self.get_rl_state())
             # get action
             action = self.get_action()
             actions.append(action)
             # set action
             action_dict = actions_dict_from_array(action)
             self.env.set_positions(action_dict)
+            # get states
+            model_states.append(self.get_model_state())
+            states.append(self.get_rl_state())
             # run environment step
             self.env.env_step()
         model_states.append(self.get_model_state())
@@ -198,13 +198,14 @@ class Worker:
     def run_n_model_steps(self):
         states = []
         for _ in range(self.sequence_length):
-            # get state
-            states.append(self.get_model_state())
             # get action
             action = self.get_action()
             # run action in env
             action_dict = actions_dict_from_array(action)
             self.env.set_positions(action_dict)
+            # get state
+            states.append(self.get_model_state())
+            # run environment step
             self.env.env_step()
         return states
 
@@ -215,21 +216,21 @@ class Worker:
         for _ in range(self.sequence_length):
             # get current vision
             vision = self.env.vision
-            # get current positions
-            current_positions = self.env.discrete_positions
-            # get action and predicted return
-            states = [self.get_rl_state()]
-            model_states = [self.get_model_state()]
-            rl_feed_dict = self.to_rl_feed_dict(states=states)
+            rl_feed_dict = self.to_rl_feed_dict(states=[self.get_rl_state()])
             actions, predicted_returns = self.sess.run(action_return_fetches, feed_dict=rl_feed_dict)
             action = actions[0]
             predicted_return = predicted_returns[0]
-            # run action in env
+            # set positions in env
             action_dict = actions_dict_from_array(action)
             self.env.set_positions(action_dict)
-            self.env.env_step()
+            # get action and predicted return
+            model_states = [self.get_model_state()]
+            # get current positions
+            current_positions = self.env.discrete_positions
             # get target positions
             target_positions = self.env.discrete_target_positions
+            # run action in env
+            self.env.env_step()
             # get current positions
             next_positions = self.env.discrete_positions
             # get predicted positions and reward
