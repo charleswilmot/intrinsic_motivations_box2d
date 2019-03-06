@@ -266,13 +266,12 @@ class ArraySummary(tex.Document):
         self.append(tex.Command("clearpage"))
 
 
-# generate_latex("../experiments/array_no_entropy_reg", regenerate_plots=False)
-path_to_array = "../experiments/simple_policy_gradient/target_0035_df_085_mlr_1e-5_wrt_buffer_size_2/"
+path_to_array = "../experiments/simple_policy_gradient/after_bug_fix/wrt_learning_rates_target_0020_df_085_mlr_1e-6/"
 # data = load_data(path_to_data_in=path_to_array + "data.pkl")
 data = load_data(path_to_exps=path_to_array + "*/",
                  path_to_data_out=path_to_array + "data.pkl")
-generate_all_plots(data, regenerate=False, keys=["model", "rl"])
-generate_all_experiment_tex_files(data, keys=["model", "rl"])
+generate_all_plots(data, regenerate=False, keys=["rl"])
+generate_all_experiment_tex_files(data, keys=["rl"])
 parameters = load_parameters(path_to_array + "*/")
 
 
@@ -471,4 +470,4 @@ def array_wrt_buffer_size():
     arrsum.generate_pdf(filepath=path_to_array + "new_impl", clean_tex=False)
 
 
-array_wrt_buffer_size()
+learning_rates()
