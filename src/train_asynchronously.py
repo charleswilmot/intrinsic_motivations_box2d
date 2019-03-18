@@ -166,6 +166,14 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    '-er', '--entropy-reg',
+    type=float,
+    action='store',
+    help="Entropy regularizer coef for A3C",
+    default=0.01
+)
+
+parser.add_argument(
     '-mbs', '--model-buffer-size',
     type=int,
     action='store',
@@ -176,7 +184,7 @@ parser.add_argument(
 parser.add_argument(
     '-rl', '--rl-algo',
     type=str,
-    choices=["DPG", "A3C", "dpg", "a3c"],
+    choices=["DPG", "A3C", "dpg", "a3c", "DRND", "drnd"],
     action='store',
     help="Type of rl algorithm.",
     default="DPG"
@@ -184,6 +192,7 @@ parser.add_argument(
 
 
 args = parser.parse_args()
+additional_worker_args = []
 with open(args.environment_conf, "rb") as f:
     args_env = pickle.load(f)
 if args.minimize_pred_err is not None:
@@ -208,15 +217,27 @@ else:
 if args.rl_algo.lower() == "dpg":
     RLCls = ac.DPGJointAgentWorker
 elif args.rl_algo.lower() == "a3c":
-    raise NotImplementedError("Implement A3C please")
+    RLCls = ac.DiscreteA3CJointAgentWorker
+    additional_worker_args += [args.entropy_reg]
+elif args.rl_algo.lower() == "ca3c":
     RLCls = ac.A3CJointAgentWorker
+elif args.rl_algo.lower() == "drnd":
+    RLCls = ac.DiscreteRandomJointAgentWorker
 else:
     raise ValueError("Check the  --rl-algo  argument please")
 
 
 WorkerCls = type('WorkerCls', (RewardCls, RLCls), {})
 
-args_worker = (args.discount_factor, args.sequence_length, reward_params, args.model_lr, args.critic_lr, args.actor_lr, args.sequence_length * args.model_buffer_size)
+args_worker = [
+    args.discount_factor,
+    args.sequence_length,
+    reward_params,
+    args.model_lr,
+    args.critic_lr,
+    args.actor_lr,
+    args.sequence_length * args.model_buffer_size
+] + additional_worker_args
 
 with ac.Experiment(
         args.n_parameter_servers, args.n_workers, WorkerCls,
@@ -237,8 +258,9 @@ with ac.Experiment(
         done = 0
         save_every = min(args.continuous, 20000)
         i = 0
+        experiment.asynchronously_run_both(500, train_actor=False)
         while done < args.continuous:
-            experiment.asynchronously_run_both(save_every, "continuous")
+            experiment.asynchronously_run_both(save_every, train_actor=True)
             done += save_every
             experiment.save_model("{}".format(i))
             i += 1

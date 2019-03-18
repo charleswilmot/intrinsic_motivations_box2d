@@ -24,7 +24,7 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    '-rl', '--after-rl-only',
+    '-arl', '--after-rl-only',
     action='store_true'
 )
 
@@ -82,6 +82,23 @@ parser.add_argument(
     default=None
 )
 
+parser.add_argument(
+    '-er', '--entropy-reg',
+    type=float,
+    action='store',
+    help="Entropy regularizer coef for A3C",
+    default=0.01
+)
+
+parser.add_argument(
+    '-rl', '--rl-algo',
+    type=str,
+    choices=["DPG", "A3C", "dpg", "a3c"],
+    action='store',
+    help="Type of rl algorithm.",
+    default="DPG"
+)
+
 
 SEQUENCE_LENGTH = 8
 N_WORKERS = 2
@@ -90,30 +107,55 @@ logdir = TemporaryDirectory()
 
 args = parser.parse_args()
 # get the Worker class to be used and the reward parameters
+additional_worker_args = []
 with open(args.environment_conf, "rb") as f:
     args_env = pickle.load(f)
 if args.minimize_pred_err is not None:
-    WorkerCls = ac.MinimizeJointAgentWorker
+    RewardCls = ac.MinimizeJointAgentWorker
     reward_params = {"model_loss_converges_to": args.minimize_pred_err}
 elif args.maximize_pred_err is not None:
-    WorkerCls = ac.MaximizeJointAgentWorker
+    RewardCls = ac.MaximizeJointAgentWorker
     reward_params = {"model_loss_converges_to": args.maximize_pred_err}
 elif args.target_pred_err is not None:
-    WorkerCls = ac.TargetErrorJointAgentWorker
+    RewardCls = ac.TargetErrorJointAgentWorker
     reward_params = {"target_prediction_error": args.target_pred_err}
 elif args.range_pred_err is not None:
-    WorkerCls = ac.RangeErrorJointAgentWorker
+    RewardCls = ac.RangeErrorJointAgentWorker
     reward_params = {"range_mini": args.range_pred_err[0], "range_maxi": args.range_pred_err[1]}
 elif args.pred_err_err is not None:
-    WorkerCls = ac.PEEJointAgentWorker
+    RewardCls = ac.PEEJointAgentWorker
     reward_params = {"pee_model_loss_converges_to": args.pred_err_err}
 else:
-    WorkerCls = ac.MinimizeJointAgentWorker
+    RewardCls = ac.MinimizeJointAgentWorker
     reward_params = {"model_loss_converges_to": 0.043}
+
+if args.rl_algo.lower() == "dpg":
+    RLCls = ac.DPGJointAgentWorker
+elif args.rl_algo.lower() == "a3c":
+    additional_worker_args += [args.entropy_reg]
+    RLCls = ac.DiscreteA3CJointAgentWorker
+elif args.rl_algo.lower() == "ca3c":
+    RLCls = ac.A3CJointAgentWorker
+elif args.rl_algo.lower() == "drnd":
+    RLCls = ac.DiscreteRandomJointAgentWorker
+else:
+    raise ValueError("Check the  --rl-algo  argument please")
+
+WorkerCls = type('WorkerCls', (RewardCls, RLCls), {})
+
 # get the environment parameters
 with open(args.environment_conf, "rb") as f:
     args_env = pickle.load(f)
-args_worker = (args.discount_factor, SEQUENCE_LENGTH, reward_params, 0, 0, 0, 256)
+# args_worker = (args.discount_factor, SEQUENCE_LENGTH, reward_params, 0, 0, 0, 256)
+args_worker = [
+    args.discount_factor,
+    SEQUENCE_LENGTH,
+    reward_params,
+    0,
+    0,
+    0,
+    SEQUENCE_LENGTH
+] + additional_worker_args
 
 models = [x for x in os.listdir(args.path) if os.path.isdir(args.path + "/" + x)]
 initial = [x for x in models if re.match("initial", x)]
@@ -132,7 +174,7 @@ else:
 
 with ac.Experiment(
         N_PARAMETER_SERVERS, N_WORKERS, WorkerCls,
-        logdir.name + "/dummy/", args_env, args_worker, display_dpi=3) as experiment:
+        logdir.name + "/dummy/", args_env, args_worker, display_dpi=10) as experiment:
     experiment.start_display_worker(training=args.sample)
     for model in models:
         print(model)

@@ -441,6 +441,277 @@ class PEJointAgentWorker(JointAgentWorker):
         self.model_summary_at_rl = tf.summary.merge([sum_model_loss_at_rl, sum_model_reward_at_rl])
 
 
+class A3CJointAgentWorker(JointAgentWorker):
+    def define_rl_net_dim(self):
+        self.rl_shared_net_dim = [self.n_discrete * 4 * 3]
+        self.actor_remaining_net_dim = [600, 4]
+        self.critic_remaining_net_dim = [600, 1]
+
+    def get_rl_state(self):
+        return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
+
+    def define_reinforcement_learning(self):
+        #############################
+        # MUST DEFINE : #############
+        #############################
+        # self.stochastic_actions
+        # self.greedy_actions
+        # self.critic_value
+        # self.critic_loss
+        # self.actor_loss
+        # self.rl_train_op
+        # self.critic_train_op
+        # self.global_rl_step
+        # self.rl_summary
+        # PLACEHOLDERS : ############
+        # self.rl_inputs
+        # self.actions
+        # self.return_targets_not_bootstraped
+        #############################
+        net_dim = self.rl_shared_net_dim
+        self.rl_inputs = tf.placeholder(shape=[None, net_dim[0]], dtype=tf.float32, name="actor_inputs")
+        self.return_targets_not_bootstraped = tf.placeholder(shape=[None], dtype=tf.float32, name="returns_target")
+        batch_size = tf.shape(self.rl_inputs)[0]
+        constant_gammas = tf.fill(dims=[batch_size], value=self.discount_factor)
+        increasing_discounted_gammas = tf.cumprod(constant_gammas, reverse=True)
+        prev_layer = self.rl_inputs
+        with tf.variable_scope("shared"):
+            for i, d in enumerate(self.rl_shared_net_dim[1:]):
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=lrelu)
+        fork_layer = prev_layer
+        with tf.variable_scope("private_to_critic"):
+            for i, d in enumerate(self.critic_remaining_net_dim):
+                activation_fn = lrelu if i < len(self.critic_remaining_net_dim) - 1 else None
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
+            self.critic_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
+        self.return_targets = self.return_targets_not_bootstraped + increasing_discounted_gammas * tf.stop_gradient(self.critic_value[-1])
+        self.critic_losses = (self.critic_value - self.return_targets) ** 2
+        self.critic_loss = tf.reduce_mean(self.critic_losses, name="loss")
+        self.actions = tf.placeholder(shape=[None, self.actor_remaining_net_dim[-1]], dtype=tf.float32, name="actor_picked_actions")  # picked actions
+        self.actor_targets = self.return_targets - tf.stop_gradient(self.critic_value)
+        targets = tf.expand_dims(self.actor_targets, -1)
+        prev_layer = fork_layer
+        with tf.variable_scope("private_to_actor"):
+            for i, d in enumerate(self.actor_remaining_net_dim[:-1]):
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i))
+            self.greedy_actions = tl.fully_connected(prev_layer, self.actor_remaining_net_dim[-1], activation_fn=None, scope="mean_actions")
+            self.log_sigma_2 = tl.fully_connected(prev_layer, self.actor_remaining_net_dim[-1], activation_fn=None, scope="log_variance_actions")
+        self.sigma_2 = tf.exp(self.log_sigma_2) + 0.01
+        self.sigma = tf.exp(0.5 * self.log_sigma_2) + 0.1
+        self.stochastic_actions = tf.random_normal(shape=tf.shape(self.greedy_actions)) * self.sigma + self.greedy_actions
+        self.action_applied_in_env = self.stochastic_actions
+        self.probs = 1 / (tf.sqrt(2 * pi * self.sigma_2)) * tf.exp(-(self.actions - self.greedy_actions) ** 2 / (2 * self.sigma_2))
+        self.log_probs = -0.5 * (log(2 * pi) + self.log_sigma_2 + (self.actions - self.greedy_actions) ** 2 / (self.sigma_2))
+        self.entropy = 0.5 * (1 + log(2 * pi) + self.log_sigma_2)
+        self.entropy_mean = tf.reduce_mean(self.entropy, name="entropy_mean")
+        # self.actor_losses = -self.log_probs * targets - self.entropy_coef * self.entropy
+        self.actor_losses = -self.log_probs * targets
+        self.actor_loss = tf.reduce_sum(self.actor_losses, name="loss")
+        # optimizer / summary
+        self.global_rl_step = tf.Variable(0, dtype=tf.int32)
+        self.global_rl_step_inc = self.global_rl_step.assign_add(1)
+        self.critic_optimizer = tf.train.AdamOptimizer(5e-4)
+        # self.critic_optimizer = tf.train.AdamOptimizer(1e-3)
+        self.critic_train_op = self.critic_optimizer.minimize(self.critic_loss)
+        self.rl_optimizer = tf.train.AdamOptimizer(5e-4)
+        self.rl_train_op = self.rl_optimizer.minimize(0.000001 * self.actor_loss + self.critic_loss)
+        # summaries
+        names = ["arm1_arm2_left", "arm1_arm2_right", "ground_arm1_left", "ground_arm1_right"]
+        mean_summaries, std_summaries = [], []
+        for i, name in zip(range(4), names):
+            mean_summary = tf.summary.scalar("joints/{}_mean".format(name), self.greedy_actions[0, i])
+            mean_summaries.append(mean_summary)
+            std_summary = tf.summary.scalar("joints/{}_std".format(name), self.sigma[0, i])
+            std_summaries.append(std_summary)
+        per_joint_summaries = mean_summaries + std_summaries
+        actor_loss_summary = tf.summary.scalar("/rl/actor_loss", tf.reduce_mean(self.actor_losses))
+        critic_loss_summary = tf.summary.scalar("/rl/critic_loss", self.critic_losses[0])
+        critic_quality = tf.reduce_mean(self.critic_losses / tf.reduce_mean((self.return_targets - tf.reduce_mean(self.return_targets)) ** 2))
+        sum_critic_quality = tf.summary.scalar("/rl/critic_quality", tf.clip_by_value(critic_quality, -20, 20))
+        self.rl_summary = tf.summary.merge([
+            actor_loss_summary,
+            critic_loss_summary,
+            sum_critic_quality] + per_joint_summaries)
+
+
+class DiscreteA3CJointAgentWorker(JointAgentWorker):
+    def __init__(self, task_index, pipe, env, cluster, logdir, discount_factor, sequence_length, reward_params,
+                 model_lr, critic_lr, actor_lr, model_buffer_size, entropy_coef):
+        self.entropy_coef = entropy_coef
+        super().__init__(task_index, pipe, env, cluster, logdir, discount_factor, sequence_length, reward_params,
+                         model_lr, critic_lr, actor_lr, model_buffer_size)
+
+
+    def define_rl_net_dim(self):
+        self.n_actions = 30
+        self.rl_shared_net_dim = [self.n_discrete * 4 * 3]
+        self.actor_remaining_net_dim = [600, 4 * self.n_actions]
+        self.critic_remaining_net_dim = [600, 1]
+
+    def get_rl_state(self):
+        return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
+
+    def define_reinforcement_learning(self):
+        #############################
+        # MUST DEFINE : #############
+        #############################
+        # self.stochastic_actions
+        # self.greedy_actions
+        # self.critic_value
+        # self.critic_loss
+        # self.actor_loss
+        # self.rl_train_op
+        # self.critic_train_op
+        # self.global_rl_step
+        # self.rl_summary
+        # PLACEHOLDERS : ############
+        # self.rl_inputs
+        # self.actions
+        # self.return_targets_not_bootstraped
+        #############################
+        net_dim = self.rl_shared_net_dim
+        self.rl_inputs = tf.placeholder(shape=[None, net_dim[0]], dtype=tf.float32, name="actor_inputs")
+        self.return_targets_not_bootstraped = tf.placeholder(shape=[None], dtype=tf.float32, name="returns_target")
+        batch_size = tf.shape(self.rl_inputs)[0]
+        batch_size_64 = tf.cast(batch_size, tf.int64)
+        constant_gammas = tf.fill(dims=[batch_size], value=self.discount_factor)
+        increasing_discounted_gammas = tf.cumprod(constant_gammas, reverse=True)
+        prev_layer = self.rl_inputs
+        with tf.variable_scope("shared"):
+            for i, d in enumerate(self.rl_shared_net_dim[1:]):
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=lrelu)
+        fork_layer = prev_layer
+        with tf.variable_scope("private_to_critic"):
+            for i, d in enumerate(self.critic_remaining_net_dim):
+                activation_fn = lrelu if i < len(self.critic_remaining_net_dim) - 1 else None
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
+            self.critic_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
+        self.return_targets = self.return_targets_not_bootstraped + increasing_discounted_gammas * tf.stop_gradient(self.critic_value[-1])
+        self.critic_losses = (self.critic_value - self.return_targets) ** 2
+        self.critic_loss = tf.reduce_mean(self.critic_losses, name="loss")
+        bounds = np.array([2.34, 2.34, 3.14, 3.14], dtype=np.float32)
+        vals = [tf.linspace(-b, b, self.n_actions) for b in bounds]
+        action_values = tf.stack(vals, axis=0)
+        self.actions = tf.placeholder(shape=[None, 4], dtype=tf.float32, name="actor_picked_actions")  # picked actions
+        b = tf.constant(bounds)
+        self.actions_indices = tf.cast(tf.floor(((self.actions + b) / (2 * b)) * (self.n_actions - 1) + 0.5), tf.int32)
+        self.actor_targets = self.return_targets - tf.stop_gradient(self.critic_value)
+        targets = tf.expand_dims(self.actor_targets, -1)
+        prev_layer = fork_layer
+        with tf.variable_scope("private_to_actor"):
+            for i, d in enumerate(self.actor_remaining_net_dim):
+                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i))
+
+            self.logits = tf.reshape(prev_layer, (-1, 4, self.n_actions))  # [BS, 4, NA]
+            # self.logits = 1000 * tf.tanh(self.logits / 1000)
+            # self.probs = tf.nn.softmax(self.logits, axis=-1) + 1 / (20 * self.n_actions)  # [BS, 4, NA]
+            # self.dist = tf.distributions.Categorical(probs=self.probs)
+            self.dist = tf.distributions.Categorical(logits=self.logits)
+            self.log_picked_probs = self.dist.log_prob(self.actions_indices)  # [BS, 4]
+            self.picked_probs = self.dist.prob(self.actions_indices)  # [BS, 4]
+            self.greedy_actions_indices = tf.argmax(self.logits, axis=-1)   # [BS, 4]
+            self.greedy_actions = tf.cast(self.greedy_actions_indices, tf.float32) * 2 * bounds / (float(self.n_actions) - 1.0) - bounds
+            self.stochastic_actions_indices = self.dist.sample()
+            self.stochastic_actions = tf.cast(self.stochastic_actions_indices, tf.float32) * 2 * bounds / (float(self.n_actions) - 1.0) - bounds  # [BS, 4]
+
+        self.action_applied_in_env = self.stochastic_actions
+        self.entropy = self.dist.entropy()
+        self.entropy_mean = tf.reduce_mean(self.entropy, name="entropy_mean")
+        # self.entropy_coef = 0.01
+        self.actor_losses = -tf.maximum(self.log_picked_probs, -4) * targets - self.entropy_coef * self.entropy
+        self.actor_loss = tf.reduce_sum(self.actor_losses, name="loss")
+        # optimizer / summary
+        self.global_rl_step = tf.Variable(0, dtype=tf.int32)
+        self.global_rl_step_inc = self.global_rl_step.assign_add(1)
+        self.critic_optimizer = tf.train.AdamOptimizer(self.critic_lr)
+        # self.critic_optimizer = tf.train.AdamOptimizer(1e-3)
+        self.critic_train_op = self.critic_optimizer.minimize(self.critic_loss)
+        self.rl_optimizer = tf.train.AdamOptimizer(self.actor_lr)
+        self.rl_train_op = self.rl_optimizer.minimize(self.actor_loss + self.critic_loss)
+        # summaries
+        names = ["arm1_arm2_left", "arm1_arm2_right", "ground_arm1_left", "ground_arm1_right"]
+        pos_summaries, prob_summaries = [], []
+        for i, name in zip(range(4), names):
+            pos_summary = tf.summary.scalar("joints/{}_pos".format(name), self.stochastic_actions[0, i])
+            pos_summaries.append(pos_summary)
+            prob_summary = tf.summary.scalar("joints/{}_prob".format(name), self.picked_probs[0, i])
+            prob_summaries.append(prob_summary)
+        per_joint_summaries = pos_summaries + prob_summaries
+        max_logits_summary = tf.summary.scalar("/rl/max_logits", tf.reduce_max(self.logits))
+        entropy_summary = tf.summary.scalar("/rl/entropy", self.entropy_mean)
+        actor_loss_summary = tf.summary.scalar("/rl/actor_loss", tf.reduce_mean(self.actor_losses))
+        critic_loss_summary = tf.summary.scalar("/rl/critic_loss", self.critic_losses[0])
+        critic_quality = tf.reduce_mean(self.critic_losses / tf.reduce_mean((self.return_targets - tf.reduce_mean(self.return_targets)) ** 2))
+        sum_critic_quality = tf.summary.scalar("/rl/critic_quality", tf.clip_by_value(critic_quality, -20, 20))
+        self.rl_summary = tf.summary.merge([
+            max_logits_summary,
+            entropy_summary,
+            actor_loss_summary,
+            critic_loss_summary,
+            sum_critic_quality] + per_joint_summaries)
+
+
+class DiscreteRandomJointAgentWorker(JointAgentWorker):
+    def define_rl_net_dim(self):
+        self.n_actions = 30
+        self.rl_shared_net_dim = [self.n_discrete * 4 * 3]
+        self.actor_remaining_net_dim = [600, 4 * self.n_actions]
+        self.critic_remaining_net_dim = [600, 1]
+
+    def get_rl_state(self):
+        return self.env.discrete_positions, self.env.discrete_speeds, self.env.discrete_target_positions
+
+    def define_reinforcement_learning(self):
+        #############################
+        # MUST DEFINE : #############
+        #############################
+        # self.stochastic_actions
+        # self.greedy_actions
+        # self.critic_value
+        # self.critic_loss
+        # self.actor_loss
+        # self.rl_train_op
+        # self.critic_train_op
+        # self.global_rl_step
+        # self.rl_summary
+        # PLACEHOLDERS : ############
+        # self.rl_inputs
+        # self.actions
+        # self.return_targets_not_bootstraped
+        #############################
+        bounds = np.array([2.34, 2.34, 3.14, 3.14], dtype=np.float32)
+        net_dim = self.rl_shared_net_dim
+        self.rl_inputs = tf.placeholder(shape=[None, net_dim[0]], dtype=tf.float32, name="actor_inputs")
+        self.return_targets_not_bootstraped = tf.placeholder(shape=[None], dtype=tf.float32, name="returns_target")
+        batch_size = tf.shape(self.rl_inputs)[0]
+        self.critic_value = tf.zeros_like(self.return_targets_not_bootstraped)
+        self.critic_losses = tf.zeros_like(self.return_targets_not_bootstraped)
+        self.critic_loss = tf.reduce_mean(self.critic_losses, name="loss")
+        self.actions = tf.placeholder(shape=[None, 4], dtype=tf.float32, name="actor_picked_actions")  # picked actions
+        # self.dist = tf.distributions.Categorical(probs=tf.constant([[[1.0] * self.n_actions] * 4]))
+        self.dist = tf.distributions.Categorical(probs=tf.ones(shape=[batch_size, 4, self.n_actions], dtype=tf.float32))
+        self.stochastic_actions_indices = self.dist.sample()
+        self.stochastic_actions = tf.cast(self.stochastic_actions_indices, tf.float32) * 2 * bounds / (float(self.n_actions) - 1.0) - bounds  # [BS, 4]
+        self.greedy_actions = self.stochastic_actions
+        self.action_applied_in_env = self.stochastic_actions
+        self.actor_loss = tf.constant(0.0)
+        self.critic_loss = tf.constant(0.0)
+        # optimizer / summary
+        self.global_rl_step = tf.Variable(0, dtype=tf.int32)
+        self.global_rl_step_inc = self.global_rl_step.assign_add(1)
+        # self.critic_optimizer = tf.train.AdamOptimizer(1e-3)
+        self.critic_train_op = tf.no_op()
+        self.rl_train_op = tf.no_op()
+        # summaries
+        names = ["arm1_arm2_left", "arm1_arm2_right", "ground_arm1_left", "ground_arm1_right"]
+        pos_summaries, prob_summaries = [], []
+        for i, name in zip(range(4), names):
+            pos_summary = tf.summary.scalar("joints/{}_pos".format(name), self.stochastic_actions[0, i])
+            pos_summaries.append(pos_summary)
+        per_joint_summaries = pos_summaries
+        self.rl_summary = tf.summary.merge(per_joint_summaries)
+
+
 class DPGJointAgentWorker(JointAgentWorker):
     def define_rl_net_dim(self):
         self.critic_net_dim = [4 + self.n_discrete * 4 * 2, 600, 1]
