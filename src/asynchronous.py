@@ -1,3 +1,4 @@
+import png
 import atexit
 import environment
 from replay_buffer import Buffer
@@ -164,6 +165,17 @@ class Worker:
         self.pipe.recv()  # done
         self.pipe.send("{} (display) going IDLE".format(self.name))
 
+    def run_video(self, path, n_sequences, training=True):
+        start_index = 0
+        if not os.path.exists(path):
+            os.mkdir(path)
+            for i in range(n_sequences):
+                start_index = self.run_n_video_steps(path, start_index, training=training)
+            os.system("ffmpeg -loglevel panic -r 24 -i {}/frame_%06d.png -vcodec mpeg4 -b 50000 -y {}/video.mp4".format(path, path))
+            self.pipe.send("{} saved video under {}".format(self.name, path))
+        else:
+            self.pipe.send("{} path already exists ({})".format(self.name, path))
+
     def run_model(self, n_updates):
         global_model_step = self.sess.run(self.global_model_step)
         n_updates += global_model_step
@@ -246,6 +258,23 @@ class Worker:
             predicted_positions = predicted_positions[0].reshape((4, -1))
             # display
             win(vision, current_positions, target_positions, predicted_positions, next_positions, current_reward, predicted_return)
+    def run_n_video_steps(self, path, start_index, training=True):
+        action_fetches = self.action_applied_in_env if training else self.greedy_actions
+        for i in range(self.sequence_length):
+            rl_feed_dict = self.to_rl_feed_dict(states=[self.get_rl_state()])
+            actions = self.sess.run(action_fetches, feed_dict=rl_feed_dict)
+            action = actions[0]
+            # set positions in env
+            action_dict = actions_dict_from_array(action)
+            self.env.set_positions(action_dict)
+            # run action in env
+            self.env.env_step()
+            # get current vision
+            vision = self.env.vision
+            # save
+            data = vision.reshape(vision.shape[0], -1)
+            png.from_array(data, "RGB").save(path + "/frame_{:06d}.png".format(start_index + i))
+        return start_index + i + 1
 
     def rewards_to_return(self, rewards, prev_return=0):
         returns = np.zeros_like(rewards)
@@ -703,6 +732,11 @@ class Experiment:
         path = self.checkpointsdir + "/{}/".format(name)
         os.mkdir(path)
         self.here_worker_pipes[0].send(("save", path))
+        print(self.here_worker_pipes[0].recv())
+
+    def save_video(self, name, n_sequences, training=True):
+        path = self.experiment_dir + "/{}/".format(name)
+        self.here_worker_pipes[0].send(("run_video", path, n_sequences, training))
         print(self.here_worker_pipes[0].recv())
 
     def restore_model(self, path):
