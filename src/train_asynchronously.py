@@ -228,7 +228,7 @@ with ac.Experiment(
         json.dump(args.__dict__, fp=f, indent=4, sort_keys=True)
     ### start display if needed
     if args.display:
-        experiment.start_display_worker(sample=False)
+        experiment.start_display_worker(training=False)
         experiment.start_tensorboard()
     ### Save initial weights
     experiment.save_model("initial")

@@ -156,10 +156,10 @@ class Worker:
         self.summary_writer.flush()
         self.pipe.send("{} going IDLE".format(self.name))
 
-    def run_display(self, sample=True):
+    def run_display(self, training=True):
         win = viewer.JointAgentWindow(self.discount_factor, return_lookback=50)
         while not self.pipe.poll():
-            self.run_n_display_steps(win, sample)
+            self.run_n_display_steps(win, training)
         win.close()
         self.pipe.recv()  # done
         self.pipe.send("{} (display) going IDLE".format(self.name))
@@ -215,8 +215,8 @@ class Worker:
         return states
 
     # TODO put that function in the subclass
-    def run_n_display_steps(self, win, sample=True):
-        action_return_fetches = [self.stochastic_actions if sample else self.greedy_actions, self.actor_value]
+    def run_n_display_steps(self, win, training=True):
+        action_return_fetches = [self.action_applied_in_env if training else self.greedy_actions, self.critic_value]
         predicted_positions_reward_fetches = [self.model_outputs, self.rewards]
         for _ in range(self.sequence_length):
             # get current vision
@@ -666,10 +666,10 @@ class Experiment:
             while p.is_alive():
                 time.sleep(0.1)
 
-    def start_display_worker(self, sample=True):
+    def start_display_worker(self, training=True):
         self.here_display_pipes.append(self.here_worker_pipes[-1])
         self.here_worker_pipes = self.here_worker_pipes[:-1]
-        self.here_display_pipes[-1].send(("run_display", sample))
+        self.here_display_pipes[-1].send(("run_display", training))
 
     def set_display_worker_idle(self):
         self.here_display_pipes[-1].send("done")  # quit run_display

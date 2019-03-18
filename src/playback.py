@@ -133,7 +133,7 @@ else:
 with ac.Experiment(
         N_PARAMETER_SERVERS, N_WORKERS, WorkerCls,
         logdir.name + "/dummy/", args_env, args_worker, display_dpi=3) as experiment:
-    experiment.start_display_worker(sample=args.sample)
+    experiment.start_display_worker(training=args.sample)
     for model in models:
         print(model)
         experiment.restore_model(args.path + "/" + model)
