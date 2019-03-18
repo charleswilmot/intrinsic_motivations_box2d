@@ -186,7 +186,7 @@ def generate_all_experiment_tex_files(data, keys=None):
                 with texfile.create(tex.Figure(position='!ht')) as plot_figure:
                     image_path = os.path.abspath(path + "plots/{}.png".format(key))
                     plot_figure.add_image(image_path, width=tex.utils.NoEscape('\linewidth'))
-                    plot_figure.add_caption(key.replace("_", " "))
+                    plot_figure.add_caption(key.replace("_", " ") + " {}".format(os.path.basename(path)))
         texfile.generate_latex(path + "/experiment.tex")
 
 
@@ -266,7 +266,7 @@ class ArraySummary(tex.Document):
         self.append(tex.Command("clearpage"))
 
 
-path_to_array = "../experiments/simple_policy_gradient/after_bug_fix/wrt_learning_rates_target_0020_df_085_mlr_1e-6/"
+path_to_array = "../experiments/discrete_a3c/test_experiments_factor_1_alr_clr_5e-4_softmax_plus_mini_20/"
 # data = load_data(path_to_data_in=path_to_array + "data.pkl")
 data = load_data(path_to_exps=path_to_array + "*/",
                  path_to_data_out=path_to_array + "data.pkl")
@@ -324,7 +324,7 @@ def by_nothing(x):
     return " "
 
 
-LOOKBACK_START = -2000
+LOOKBACK_START = -200
 LOOKBACK_END = -1
 
 
@@ -349,7 +349,7 @@ def get_std_end_loss(data):
 
 
 def get_mean_critic_q(data):
-    return "{:.3f}".format(np.mean(data["rl"]["critic_quality"][1]))
+    return "{:.3f}".format(np.mean(data["rl"]["critic_quality"][1][LOOKBACK_START:LOOKBACK_END]))
 
 
 def continuous_stagewise_separate():
@@ -446,7 +446,7 @@ def standards_experiments():
     grouped_by_type = group_parameters_by(parameters, by_reward_type_and_param)
     for exp_type in sorted(grouped_by_type):
         with arrsum.create(tex.Section("{}".format(exp_type))):
-            for p in grouped_by_type[exp_type]:
+            for p in sorted(grouped_by_type[exp_type]):
                 arrsum.add_experiment(p)
             arrsum.clearpage()
     arrsum.generate_pdf(filepath=path_to_array + "new_impl", clean_tex=False)
@@ -470,4 +470,4 @@ def array_wrt_buffer_size():
     arrsum.generate_pdf(filepath=path_to_array + "new_impl", clean_tex=False)
 
 
-learning_rates()
+standards_experiments()

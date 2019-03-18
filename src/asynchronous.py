@@ -190,7 +190,14 @@ class Worker:
     def get_action(self):
         state = self.get_rl_state()
         feed_dict = self.to_rl_feed_dict(states=[state])
-        action = self.sess.run(self.greedy_actions, feed_dict=feed_dict)
+        action = self.sess.run(self.action_applied_in_env, feed_dict=feed_dict)
+        # action, sai, sap = self.sess.run([self.action_applied_in_env, self.stochastic_actions_indices, self.probs], feed_dict=feed_dict)
+        # feed_dict[self.actions] = action
+        # picked_probs, ai = self.sess.run([self.picked_probs, self.actions_indices], feed_dict=feed_dict)
+        # if (sai != ai).any():
+        #     print("{} : \n{}\n{}\n{}\n{}\n".format(self.name, picked_probs[0], sap[0], sai[0], ai[0]))
+        # if (picked_probs < 1e-4).any():
+        #     print("{} picked an action with very low probability (<1e-4): \n{}\n{}\n{}\n{}\n".format(self.name, picked_probs[0], sap[0], sai[0], ai[0]))
         return action[0]
 
     def run_n_rl_steps(self):
@@ -230,9 +237,9 @@ class Worker:
     def run_n_display_steps(self, win, training=True):
         action_return_fetches = [self.action_applied_in_env if training else self.greedy_actions, self.critic_value]
         predicted_positions_reward_fetches = [self.model_outputs, self.rewards]
-        for _ in range(self.sequence_length):
-            # get current vision
-            vision = self.env.vision
+        args_list = [None] * self.sequence_length
+        rewards = np.zeros(self.sequence_length)
+        for i in range(self.sequence_length):
             rl_feed_dict = self.to_rl_feed_dict(states=[self.get_rl_state()])
             actions, predicted_returns = self.sess.run(action_return_fetches, feed_dict=rl_feed_dict)
             action = actions[0]
@@ -248,6 +255,8 @@ class Worker:
             target_positions = self.env.discrete_target_positions
             # run action in env
             self.env.env_step()
+            # get current vision
+            vision = self.env.vision
             # get current positions
             next_positions = self.env.discrete_positions
             # get predicted positions and reward
@@ -257,7 +266,25 @@ class Worker:
             current_reward = current_rewards[0]
             predicted_positions = predicted_positions[0].reshape((4, -1))
             # display
-            win(vision, current_positions, target_positions, predicted_positions, next_positions, current_reward, predicted_return)
+            args = [
+                vision,
+                current_positions,
+                target_positions,
+                predicted_positions,
+                next_positions,
+                current_reward,
+                predicted_return]
+            args_list[i] = args
+            rewards[i] = current_reward
+            win(*args)
+        indices = np.argsort(rewards)  #[-self.sequence_length // 10:]
+        # for args in args_list:
+        #     win(*args)
+        # for i in indices:
+        #     if i != 0:
+        #         win(*args_list[i - 1])
+        #         win(*args_list[i])
+
     def run_n_video_steps(self, path, start_index, training=True):
         action_fetches = self.action_applied_in_env if training else self.greedy_actions
         for i in range(self.sequence_length):
@@ -729,7 +756,6 @@ class DPGJointAgentWorker(JointAgentWorker):
         # self.rl_train_op
         # self.critic_train_op
         # self.global_rl_step
-        # self.global_both_step  --> must be automalicaly incremented when calling some train op...
         # self.rl_summary
         # PLACEHOLDERS : ############
         # self.rl_inputs
@@ -746,26 +772,27 @@ class DPGJointAgentWorker(JointAgentWorker):
                 prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
             self.greedy_actions = prev_layer * 10
             self.stochastic_actions = self.greedy_actions + tf.random_normal(shape=tf.shape(self.greedy_actions), stddev=0.1)
+            self.action_applied_in_env = self.greedy_actions
             actor_vars = [x for x in tf.global_variables() if x.name.startswith("actor_net")]
         with tf.variable_scope("critic_net"):
             prev_layer = tf.concat([self.rl_inputs, self.actions], axis=1)
             for i, d in enumerate(self.critic_net_dim[1:]):
                 activation_fn = lrelu if i < len(self.critic_net_dim) - 2 else None
                 prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn)
-            self.critic_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
+            self.critic_value_from_phd = tf.squeeze(prev_layer, axis=1, name="critic_value")
         with tf.variable_scope("critic_net"):
             prev_layer = tf.concat([self.rl_inputs, self.greedy_actions], axis=1)  # could also add noise (see stochastic)
             for i, d in enumerate(self.critic_net_dim[1:]):
                 activation_fn = lrelu if i < len(self.critic_net_dim) - 2 else None
                 prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=activation_fn, reuse=True)
-            self.actor_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
+            self.critic_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
         # losses
         constant_gammas = tf.fill(dims=[tf.shape(self.rl_inputs)[0]], value=self.discount_factor)
         increasing_discounted_gammas = tf.cumprod(constant_gammas, reverse=True)
-        return_targets = self.return_targets_not_bootstraped + increasing_discounted_gammas * self.critic_value[-1]
-        self.critic_losses = (return_targets - self.critic_value) ** 2  # * (1 - increasing_discounted_gammas)
+        return_targets = self.return_targets_not_bootstraped + increasing_discounted_gammas * self.critic_value_from_phd[-1]
+        self.critic_losses = (return_targets - self.critic_value_from_phd) ** 2  # * (1 - increasing_discounted_gammas)
         self.critic_loss = tf.reduce_mean(self.critic_losses, name="critic_loss")
-        self.actor_loss = -tf.reduce_mean(self.actor_value)
+        self.actor_loss = -tf.reduce_mean(self.critic_value)
         # train ops
         self.global_rl_step = tf.Variable(0, dtype=tf.int32)
         self.global_rl_step_inc = self.global_rl_step.assign_add(1)
@@ -776,12 +803,12 @@ class DPGJointAgentWorker(JointAgentWorker):
             with tf.control_dependencies([self.actor_train_op]):
                 self.rl_train_op = tf.no_op()
         # summaries
-        sum_actor_loss = tf.summary.scalar("/rl/actor_loss", tf.clip_by_value(-self.actor_value[0], -20, 20))
+        sum_actor_loss = tf.summary.scalar("/rl/actor_loss", tf.clip_by_value(-self.critic_value[0], -20, 20))
         sum_critic_loss = tf.summary.scalar("/rl/critic_loss", tf.clip_by_value(self.critic_losses[0], -20, 20))
         critic_quality = tf.reduce_mean(self.critic_losses / tf.reduce_mean((return_targets - tf.reduce_mean(return_targets)) ** 2))
         sum_critic_quality = tf.summary.scalar("/rl/critic_quality", tf.clip_by_value(critic_quality, -20, 20))
         names = ["arm1_arm2_left", "arm1_arm2_right", "ground_arm1_left", "ground_arm1_right"]
-        grad = tf.gradients(self.actor_value, self.greedy_actions)[0]
+        grad = tf.gradients(self.critic_value, self.greedy_actions)[0]
         action_summaries, grad_summaries = [], []
         for i, name in zip(range(4), names):
             action_summary = tf.summary.scalar("joints/{}".format(name), self.greedy_actions[0, i])
@@ -877,14 +904,14 @@ class MaximizeJointAgentWorker(PEJointAgentWorker):
 
 class TargetErrorJointAgentWorker(PEJointAgentWorker):
     def define_reward(self, target_prediction_error):
-        self.rewards = -tf.abs(self.model_losses - target_prediction_error) * (1 - self.discount_factor) / 0.04
+        self.rewards = -tf.abs(self.model_losses - target_prediction_error) * (1 - self.discount_factor) / 0.004
 
 
 class RangeErrorJointAgentWorker(PEJointAgentWorker):
     def define_reward(self, range_mini, range_maxi):
         mean = (range_maxi + range_mini) / 2
         dist = (range_maxi - range_mini) / 2
-        self.rewards = -tf.nn.relu(-(dist - tf.abs(self.model_losses - mean)) * (1 - self.discount_factor) / 0.04)
+        self.rewards = -tf.nn.relu(-(dist - tf.abs(self.model_losses - mean)) * (1 - self.discount_factor) / 0.004)
 
 
 class Experiment:

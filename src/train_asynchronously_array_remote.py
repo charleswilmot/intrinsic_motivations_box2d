@@ -14,7 +14,7 @@ try:
     array_id = int(os.environ["SLURM_ARRAY_TASK_ID"])
 except:
     array_id = -1
-array_path = "../experiments/simple_policy_gradient/target_0035_df_085_mlr_1e-5_wrt_buffer_size_2/"
+array_path = "../experiments/discrete_a3c/test_pred_err_err/"
 slurm_log_path = "{}/log_array_id_{}.log".format(array_path, array_id)
 
 
@@ -74,6 +74,10 @@ def format_reward_params(*reward_param):
 
 def format_discount_factor(df):
     return "{:03d}".format(int(df * 1000) // 10)
+
+
+def format_learning_rate(lr):
+    return "{:.2e}".format(lr)
 
 
 def array_wrt_training_type():
@@ -224,7 +228,92 @@ def array_wrt_buffer_size():
     return commands, paths
 
 
-commands, paths = array_wrt_buffer_size()
+def array_standard_experiments_discrete_a3c():
+    commands, paths = [], []
+    for df in [0, 0.5, 0.85]:
+        for reward_type, reward_param in [("--minimize-pred-err", [0.003]),
+                                          ("--maximize-pred-err", [0.003]),
+                                          ("--target-pred-err", [0.005]),
+                                          ("--target-pred-err", [0.010]),
+                                          ("--target-pred-err", [0.015])]:
+            path = array_path + "/{}_{}_{}".format(
+                format_reward_type(reward_type),
+                format_reward_params(*reward_param),
+                format_discount_factor(df))
+            args_dict = {}
+            args_dict[reward_type] = reward_param
+            args_dict["-df"] = df
+            args_dict["-nw"] = 32
+            args_dict["-np"] = 2
+            args_dict["--continuous"] = 10000
+            args_dict["-sl"] = 128
+            args_dict["-clr"] = 5e-5
+            args_dict["-mlr"] = 1e-4
+            args_dict["-alr"] = 5e-5
+            args_dict["-rl"] = "a3c"
+            args_dict["-e"] = "../environments/two_arms_45_max_torque_1000_ndiscrete_128_medium_weight_balls.pkl"
+            args_dict["--model-buffer-size"] = 1
+            args_dict["--entropy-reg"] = 0.005
+            commands.append(make_command(path, args_dict))
+            paths.append(path)
+    return commands, paths
+
+
+def array_discrete_a3c_search_entropy_reg():
+    commands, paths = [], []
+    for reg in [0.001, 0.005, 0.01, 0.05, 0.1]:
+        for reward_type, reward_param in [("--minimize-pred-err", [0.003]),
+                                          ("--maximize-pred-err", [0.003])]:
+            path = array_path + "/{}_{}_{}".format(
+                format_reward_type(reward_type),
+                format_reward_params(*reward_param),
+                reg)
+            args_dict = {}
+            args_dict[reward_type] = reward_param
+            args_dict["-df"] = 0.85
+            args_dict["-nw"] = 32
+            args_dict["-np"] = 2
+            args_dict["--continuous"] = 10000
+            args_dict["-sl"] = 128
+            args_dict["-clr"] = 1e-4
+            args_dict["-mlr"] = 1e-4
+            args_dict["-alr"] = 1e-4
+            args_dict["-rl"] = "a3c"
+            args_dict["-e"] = "../environments/two_arms_45_max_torque_1000_ndiscrete_128_medium_weight_balls.pkl"
+            args_dict["--model-buffer-size"] = 1
+            args_dict["--entropy-reg"] = reg
+            commands.append(make_command(path, args_dict))
+            paths.append(path)
+    return commands, paths
+
+
+def array_standard_experiments_discrete_a3c():
+    commands, paths = [], []
+    for df in [0, 0.5, 0.85]:
+        for alr in [1e-5, 5e-5, 1e-4]:
+            path = array_path + "/alr_clr_{}_mlr_1e-4_df_{}".format(
+                format_learning_rate(alr),
+                format_discount_factor(df))
+            args_dict = {}
+            args_dict["--pred-err-err"] = 0.003
+            args_dict["-df"] = df
+            args_dict["-nw"] = 32
+            args_dict["-np"] = 2
+            args_dict["--continuous"] = 10000
+            args_dict["-sl"] = 128
+            args_dict["-clr"] = alr
+            args_dict["-mlr"] = 1e-4
+            args_dict["-alr"] = alr
+            args_dict["-rl"] = "a3c"
+            args_dict["-e"] = "../environments/two_arms_45_max_torque_1000_ndiscrete_128_medium_weight_balls.pkl"
+            args_dict["--model-buffer-size"] = 1
+            args_dict["--entropy-reg"] = 0.005
+            commands.append(make_command(path, args_dict))
+            paths.append(path)
+    return commands, paths
+
+
+commands, paths = array_standard_experiments_discrete_a3c()
 if array_id < len(commands):
     cmd = commands[array_id]
     experiment_path = paths[array_id]
