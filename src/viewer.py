@@ -253,8 +253,8 @@ class DiscreteJointPositionIAX:
         self._title = title
 
     def __initaxes__(self, predicted_position, next_position, current_position, target_position):
-        self._predicted_line, = self.ax.plot(predicted_position, "o-")
-        self._next_line, = self.ax.plot(next_position, "o-")
+        self._predicted_line, = self.ax.plot(predicted_position, "-")
+        self._next_line, = self.ax.plot(next_position, "-")
         self._current_line, = self.ax.plot(current_position, "k--", alpha=0.6)
         self._target_line, = self.ax.plot(target_position, "r--", alpha=0.6)
         self.ax.set_ylim(*self._lim)
