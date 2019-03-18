@@ -15,14 +15,14 @@ skin_order = [
 skin_resolution = 12
 xlim = [-20.5, 20.5]
 ylim = [-13.5, 13.5]
-json_model = "../models/two_arms.json"
-dpi = 1
+json_model = "../models/two_arms_max_torque_1000_medium_weight_balls.json"
+dpi = 10
 dt = 1 / 150
-n_discrete = 32
-env_step_length = 450
+n_discrete = 128
+env_step_length = 45
 
 
 args_env = (json_model, skin_order, skin_resolution, xlim, ylim, dpi, env_step_length, dt, n_discrete)
 
-with open("../environments/two_arms_450.pkl", "wb") as f:
+with open("../environments/two_arms_45_max_torque_1000_ndiscrete_128_medium_weight_balls_dpi_10.pkl", "wb") as f:
     pickle.dump(args_env, f)
