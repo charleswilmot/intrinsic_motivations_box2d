@@ -173,7 +173,5 @@ with ac.Experiment(
     for model in models:
         print(model)
         experiment.restore_model(args.path + "/" + model)
-        experiment.save_video(model, 500, args.sample)
-        os.rename(logdir.name + "/dummy/" + model + "/video.mp4", "/tmp/{}.mp4".format(model))
         while input(">>> ") != "n":
             pass
