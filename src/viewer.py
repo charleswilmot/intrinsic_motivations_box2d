@@ -136,7 +136,7 @@ class JointsIAX:
 
 
 class OnlineReturnIAX:
-    def __init__(self, ax, discount_factor, return_lookback=100, lim=[[-2, 0.5]]):
+    def __init__(self, ax, discount_factor, return_lookback=100, lim=[[-5, 5]]):
         self.ax = ax
         self._discount_factor = discount_factor
         self._return_lookback = return_lookback
