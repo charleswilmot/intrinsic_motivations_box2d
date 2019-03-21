@@ -1,5 +1,5 @@
+from tempfile import TemporaryDirectory
 import png
-import atexit
 import environment
 from replay_buffer import Buffer
 import socket
@@ -185,14 +185,18 @@ class Worker:
 
     def run_video(self, path, n_sequences, training=True):
         start_index = 0
-        if not os.path.exists(path):
-            os.mkdir(path)
+        with TemporaryDirectory() as tmppath:
+            while not os.path.isdir(tmppath):
+                time.sleep(0.1)
             for i in range(n_sequences):
-                start_index = self.run_n_video_steps(path, start_index, training=training)
-            os.system("ffmpeg -loglevel panic -r 24 -i {}/frame_%06d.png -vcodec mpeg4 -b 50000 -y {}/video.mp4".format(path, path))
-            self.pipe.send("{} saved video under {}".format(self.name, path))
-        else:
-            self.pipe.send("{} path already exists ({})".format(self.name, path))
+                start_index = self.run_n_video_steps(tmppath, start_index, training=training)
+            os.system("ffmpeg -loglevel panic -r 24 -i {}/frame_%06d.png -vcodec mpeg4 -b 100000 -y {}".format(tmppath, path))
+        self.pipe.send("{} saved video under {}".format(self.name, path))
+
+    def save_contact_logs(self, name):
+        path = self.logdir + "/worker{}/contacts_{}.pkl".format(self.task_index, name)
+        self.env.save_contact_logs(path)
+        self.pipe.send("{} saved contact logs under {}".format(self.name, path))
 
     def run_model(self, n_updates):
         global_model_step = self.sess.run(self.global_model_step)
@@ -979,8 +983,10 @@ class Experiment:
     def mktree(self):
         self.logdir = self.experiment_dir + "/log"
         self.checkpointsdir = self.experiment_dir + "/checkpoints"
+        self.videodir = self.experiment_dir + "/video"
         os.mkdir(self.experiment_dir)
         os.mkdir(self.logdir)
+        os.mkdir(self.videodir)
         os.mkdir(self.checkpointsdir)
 
     def parameter_server_func(self, task_index):
@@ -1056,7 +1062,7 @@ class Experiment:
         print(self.here_worker_pipes[0].recv())
 
     def save_video(self, name, n_sequences, training=True):
-        path = self.experiment_dir + "/{}/".format(name)
+        path = self.videodir + "/{}.mp4".format(name)
         self.here_worker_pipes[0].send(("run_video", path, n_sequences, training))
         print(self.here_worker_pipes[0].recv())
 

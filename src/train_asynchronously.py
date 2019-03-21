@@ -258,6 +258,8 @@ with ac.Experiment(
             done += save_every
             experiment.save_model("{}".format(i))
             i += 1
+            experiment.save_video("{}_sample".format(done), 2 * 60 * 24 // args.sequence_length, True)
+            experiment.save_video("{}_greedy".format(done), 2 * 60 * 24 // args.sequence_length, False)
         experiment.save_contact_logs(done)
     else:
         ### stage-wise learning
