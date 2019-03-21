@@ -264,6 +264,7 @@ with ac.Experiment(
             done += save_every
             experiment.save_model("{}".format(i))
             i += 1
+        experiment.save_contact_logs(done)
     else:
         ### stage-wise learning
         for i in range(args.n_stages):

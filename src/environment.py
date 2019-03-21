@@ -5,6 +5,7 @@ import numpy as np
 import tactile_map as tm
 import pid
 from PIL import Image, ImageDraw
+import pickle
 
 
 def discretize(arr, mini, maxi, n):
@@ -12,6 +13,10 @@ def discretize(arr, mini, maxi, n):
     discrete -= np.expand_dims(arr, -1)
     discrete = np.cos(np.pi * discrete / (maxi - mini) - np.pi * (maxi + mini) / (maxi - mini)) ** 200
     return discrete
+
+
+def custom_mod_2_pi(x, center=0.0):
+    return ((x + np.pi - center) % (2 * np.pi)) - (np.pi - center)
 
 
 class Environment(object):
@@ -35,6 +40,7 @@ class Environment(object):
 
         """
         world, bodies, joints = json2d.createWorldFromJson(world_file)
+        self._count = 0
         self.dt = dt
         self._vel_iters = 6
         self._pos_iters = 2
@@ -43,7 +49,10 @@ class Environment(object):
         self._n_discrete = n_discrete
         self.world = world
         self.bodies = bodies
+        self.to_name = {self.bodies[name]: name for name in self.bodies}
+        self.contact_logs = {}
         self.joints = joints
+        self.used_bodies = {k: bodies[k] for k in bodies if k in [a for a, b in skin_order]}
         self.joint_pids = {key: pid.PID(dt=self.dt)
                            for key in self.joints}
         self._joint_keys = [key for key in sorted(self.joints)]
@@ -63,6 +72,27 @@ class Environment(object):
         self._computed_discrete_speeds = False
         self._computed_target_positions = False
         self._computed_discrete_target_positions = False
+
+    def log_contacts(self):
+        contacts = {body:
+                    [self.to_name[ce.other] for ce in self.bodies[body].contacts
+                     if ce.contact.touching] for body in self.used_bodies}
+        contacts = {body: contacts[body] for body in contacts if len(contacts[body]) > 0}
+        if len(contacts) != 0:
+            if self._count in self.contact_logs:
+                for body in contacts:
+                    if body in self.contact_logs[self._count]:
+                        for other in contacts[body]:
+                            if other not in self.contact_logs[self._count][body]:
+                                self.contact_logs[self._count][body].append(other)
+                    else:
+                        self.contact_logs[self._count][body] = contacts[body]
+            else:
+                self.contact_logs[self._count] = contacts
+
+    def save_contact_logs(self, path):
+        with open(path, "wb") as f:
+            pickle.dump(self.contact_logs, f)
 
     def set_speeds(self, speeds):
         for key in speeds:
@@ -99,7 +129,7 @@ class Environment(object):
                 self._buf_target_positions[i] = pos
                 self.joint_pids[key].setpoint = pos
 
-    def set_positions(self, positions):
+    def set_positions_old_but_not_so_old_but_still_old(self, positions):
         threshold = 0.05
         for i, key in enumerate(self._joint_keys):
             if key in positions:
@@ -115,10 +145,30 @@ class Environment(object):
                 self.joint_pids[key].setpoint = pos
         self._computed_discrete_target_positions = False
 
+    def set_positions(self, positions):
+        threshold = 0.05
+        for i, key in enumerate(self._joint_keys):
+            if key in positions:
+                self._joints_in_position_mode.add(key)
+                pos = positions[key]
+                current = self.joints[key].angle
+                if self.joints[key].limitEnabled:
+                    min_lim, max_lim = self.joints[key].limits
+                    if pos < min_lim + threshold:
+                        pos = min_lim - threshold * threshold / (pos - 2 * threshold - min_lim)
+                    elif pos > max_lim - threshold:
+                        pos = max_lim - threshold * threshold / (pos + 2 * threshold - max_lim)
+                else:
+                    pos = custom_mod_2_pi(pos, center=current)
+                self._buf_target_positions[i] = pos
+                self.joint_pids[key].setpoint = pos
+        self._computed_discrete_target_positions = False
+
     def step(self):
         for key in self._joints_in_position_mode:
             self.joint_pids[key].step(self.joints[key].angle)
             self.joints[key].motorSpeed = np.clip(self.joint_pids[key].output, -np.pi, np.pi)
+        self.log_contacts()
         self.world.Step(self.dt, self._vel_iters, self._pos_iters)
         self._computed_vision = False
         self._computed_tactile = False
@@ -132,6 +182,7 @@ class Environment(object):
     def env_step(self):
         for i in range(self.env_step_length):
             self.step()
+        self._count += 1
 
     def _get_state_vision(self):
         if self._computed_vision:
