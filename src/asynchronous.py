@@ -29,6 +29,24 @@ def lrelu(x):
     return tf.nn.relu(x) * (1 - alpha) + x * alpha
 
 
+def exponential_moving_stats(ten, alpha):
+    mean, var = tf.nn.moments(ten, axes=0)
+    std = tf.sqrt(var)
+    moving_mean = tf.Variable(tf.zeros_like(mean))
+    moving_mean_assign = moving_mean.assign(alpha * moving_mean + (1 - alpha) * mean)
+    moving_std = tf.Variable(tf.ones_like(std))
+    moving_std_assign = moving_std.assign(alpha * moving_std + (1 - alpha) * std)
+    cond = tf.less(tf.shape(ten)[0], 2)
+    moving_mean_cond = tf.cond(cond, lambda: moving_mean, lambda: moving_mean_assign)
+    moving_std_cond = tf.cond(cond, lambda: moving_std, lambda: moving_std_assign)
+    return moving_mean_cond, moving_std_cond
+
+
+def normalize(ten, alpha):
+    mean, std = exponential_moving_stats(ten, alpha)
+    return (ten - mean) / (std + 1e-5)
+
+
 def get_cluster(n_parameter_servers, n_workers):
     spec = {}
     port = get_available_port(2222)
@@ -868,7 +886,7 @@ class PEEJointAgentWorker(JointAgentWorker):
         per_joint_model_losses = tf.reduce_mean((self.model_outputs - self.model_targets) ** 2, axis=-1)   # [BS, 4]
         self.model_losses = tf.reduce_mean(per_joint_model_losses, axis=-1)                                # [BS]
         self.model_loss = tf.reduce_mean(self.model_losses, name="loss")                                   # []
-        self.pee_model_losses = tf.reduce_mean((per_joint_model_losses - self.pee_model_outputs) ** 2, axis=-1)  # [BS]
+        self.pee_model_losses = tf.reduce_mean((normalize(per_joint_model_losses, 0.95) - self.pee_model_outputs) ** 2, axis=-1)  # [BS]
         self.pee_model_loss = tf.reduce_mean(self.pee_model_losses, name="pee_loss")                       # []
         self.define_reward(**self.reward_params)
         self.global_model_step = tf.Variable(0, dtype=tf.int32)
@@ -885,33 +903,38 @@ class PEEJointAgentWorker(JointAgentWorker):
         sum_model_reward_at_rl = tf.summary.scalar("/rl/reward", self.rewards[0])
         self.model_summary_at_rl = tf.summary.merge([sum_model_loss_at_rl, sum_model_reward_at_rl, sum_model_pee_loss_at_rl])
 
-    def define_reward(self, pee_model_loss_converges_to):
-        reward_scale = (1 - self.discount_factor) / pee_model_loss_converges_to
-        self.rewards = reward_scale * self.pee_model_losses
+    def define_reward(self):
+        # reward_scale = (1 - self.discount_factor) / pee_model_loss_converges_to
+        # self.rewards = reward_scale * self.pee_model_losses
+        self.rewards = normalize(self.model_losses, 0.95) * tf.sqrt(1 - self.discount_factor ** 2)
 
 
 class MinimizeJointAgentWorker(PEJointAgentWorker):
-    def define_reward(self, model_loss_converges_to):
-        reward_scale = (1 - self.discount_factor) / model_loss_converges_to
-        self.rewards = - reward_scale * self.model_losses
+    def define_reward(self):
+        # reward_scale = (1 - self.discount_factor) / model_loss_converges_to
+        # self.rewards = - reward_scale * self.model_losses
+        self.rewards = - normalize(self.model_losses, 0.95) * tf.sqrt(1 - self.discount_factor ** 2)
 
 
 class MaximizeJointAgentWorker(PEJointAgentWorker):
-    def define_reward(self, model_loss_converges_to):
-        reward_scale = (1 - self.discount_factor) / model_loss_converges_to
-        self.rewards = reward_scale * self.model_losses
+    def define_reward(self):
+        # reward_scale = (1 - self.discount_factor) / model_loss_converges_to
+        # self.rewards = reward_scale * self.model_losses
+        self.rewards = normalize(self.model_losses, 0.95) * tf.sqrt(1 - self.discount_factor ** 2)
 
 
 class TargetErrorJointAgentWorker(PEJointAgentWorker):
     def define_reward(self, target_prediction_error):
-        self.rewards = -tf.abs(self.model_losses - target_prediction_error) * (1 - self.discount_factor) / 0.004
+        # self.rewards = -tf.abs(self.model_losses - target_prediction_error) * (1 - self.discount_factor) / 0.004
+        deviation = tf.abs(self.model_losses - target_prediction_error)
+        self.rewards = - normalize(deviation, 0.95) * tf.sqrt(1 - self.discount_factor ** 2)
 
 
 class RangeErrorJointAgentWorker(PEJointAgentWorker):
     def define_reward(self, range_mini, range_maxi):
         mean = (range_maxi + range_mini) / 2
         dist = (range_maxi - range_mini) / 2
-        self.rewards = -tf.nn.relu(-(dist - tf.abs(self.model_losses - mean)) * (1 - self.discount_factor) / 0.004)
+        self.rewards = normalize(-tf.nn.relu(-(dist - tf.abs(self.model_losses - mean))), 0.95) * tf.sqrt(1 - self.discount_factor ** 2)
 
 
 class Experiment:
@@ -1036,6 +1059,12 @@ class Experiment:
         path = self.experiment_dir + "/{}/".format(name)
         self.here_worker_pipes[0].send(("run_video", path, n_sequences, training))
         print(self.here_worker_pipes[0].recv())
+
+    def save_contact_logs(self, name):
+        for p in self.here_worker_pipes:
+            p.send(("save_contact_logs", name))
+        for p in self.here_worker_pipes:
+            p.recv()
 
     def restore_model(self, path):
         self.here_worker_pipes[0].send(("restore", path))
