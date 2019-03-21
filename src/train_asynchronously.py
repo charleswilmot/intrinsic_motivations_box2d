@@ -184,6 +184,14 @@ parser.add_argument(
     default="DPG"
 )
 
+parser.add_argument(
+    '-se', '--save-every',
+    type=int,
+    action='store',
+    help="Save model every N sequences",
+    default=5000
+)
+
 
 args = parser.parse_args()
 additional_worker_args = []
@@ -243,21 +251,19 @@ with ac.Experiment(
         json.dump(args.__dict__, fp=f, indent=4, sort_keys=True)
     ### start display if needed
     if args.display:
-        experiment.start_display_worker(training=False)
+        experiment.start_display_worker(training=True)
         experiment.start_tensorboard()
     ### Save initial weights
     experiment.save_model("initial")
     if args.continuous:
         ### continuous learning
         done = 0
-        save_every = min(args.continuous, 20000)
-        i = 0
-        experiment.asynchronously_run_both(500, train_actor=False)
+        experiment.asynchronously_run_both(50, train_actor=False)
         while done < args.continuous:
-            experiment.asynchronously_run_both(save_every, train_actor=True)
-            done += save_every
-            experiment.save_model("{}".format(i))
-            i += 1
+            todo = min(args.save_every, args.continuous - done)
+            experiment.asynchronously_run_both(todo, train_actor=True)
+            done += todo
+            experiment.save_model("{}".format(done))
             experiment.save_video("{}_sample".format(done), 2 * 60 * 24 // args.sequence_length, True)
             experiment.save_video("{}_greedy".format(done), 2 * 60 * 24 // args.sequence_length, False)
         experiment.save_contact_logs(done)
