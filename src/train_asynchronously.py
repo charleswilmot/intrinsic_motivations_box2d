@@ -102,18 +102,14 @@ parser.add_argument(
 
 parser.add_argument(
     '--minimize-pred-err',
-    type=float,
-    action='store',
-    help="Reward type. Pass the 'model_loss_converges_to' param",
-    default=None
+    action='store_true',
+    help="Reward type. Pass the 'model_loss_converges_to' param"
 )
 
 parser.add_argument(
     '--maximize-pred-err',
-    type=float,
-    action='store',
-    help="Reward type. Pass the 'model_loss_converges_to' param",
-    default=None
+    action='store_true',
+    help="Reward type. Pass the 'model_loss_converges_to' param"
 )
 
 parser.add_argument(
@@ -135,10 +131,8 @@ parser.add_argument(
 
 parser.add_argument(
     '--pred-err-err',
-    type=float,
-    action='store',
-    help="Reward type. Pass the 'pee_model_loss_converges_to' params",
-    default=None
+    action='store_true',
+    help="Reward type. Pass the 'pee_model_loss_converges_to' params"
 )
 
 parser.add_argument(
@@ -195,24 +189,24 @@ args = parser.parse_args()
 additional_worker_args = []
 with open(args.environment_conf, "rb") as f:
     args_env = pickle.load(f)
-if args.minimize_pred_err is not None:
+if args.minimize_pred_err:
     RewardCls = ac.MinimizeJointAgentWorker
-    reward_params = {"model_loss_converges_to": args.minimize_pred_err}
-elif args.maximize_pred_err is not None:
+    reward_params = {}
+elif args.maximize_pred_err:
     RewardCls = ac.MaximizeJointAgentWorker
-    reward_params = {"model_loss_converges_to": args.maximize_pred_err}
+    reward_params = {}
 elif args.target_pred_err is not None:
     RewardCls = ac.TargetErrorJointAgentWorker
     reward_params = {"target_prediction_error": args.target_pred_err}
 elif args.range_pred_err is not None:
     RewardCls = ac.RangeErrorJointAgentWorker
     reward_params = {"range_mini": args.range_pred_err[0], "range_maxi": args.range_pred_err[1]}
-elif args.pred_err_err is not None:
+elif args.pred_err_err:
     RewardCls = ac.PEEJointAgentWorker
-    reward_params = {"pee_model_loss_converges_to": args.pred_err_err}
+    reward_params = {}
 else:
     RewardCls = ac.MinimizeJointAgentWorker
-    reward_params = {"model_loss_converges_to": 0.043}
+    reward_params = {}
 
 if args.rl_algo.lower() == "dpg":
     RLCls = ac.DPGJointAgentWorker
