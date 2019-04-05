@@ -121,6 +121,14 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    '--sparse-maximize-pred-err',
+    type=float,
+    action='store',
+    help="Reward type. Pass the 'limit' param",
+    default=None
+)
+
+parser.add_argument(
     '--range-pred-err',
     type=float,
     nargs=2,
@@ -203,6 +211,9 @@ if args.minimize_pred_err:
 elif args.maximize_pred_err:
     RewardCls = ac.MaximizeJointAgentWorker
     reward_params = {}
+elif args.sparse_maximize_pred_err:
+    RewardCls = ac.MaximizeSparseJointAgentWorker
+    reward_params = {"limit": args.sparse_maximize_pred_err}
 elif args.target_pred_err is not None:
     RewardCls = ac.TargetErrorJointAgentWorker
     reward_params = {"target_prediction_error": args.target_pred_err}

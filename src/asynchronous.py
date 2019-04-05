@@ -1,3 +1,4 @@
+from scipy import special
 from tempfile import TemporaryDirectory
 import png
 import environment
@@ -925,6 +926,20 @@ class MaximizeJointAgentWorker(PEJointAgentWorker):
         # reward_scale = (1 - self.discount_factor) / model_loss_converges_to
         # self.rewards = reward_scale * self.model_losses
         self.rewards = normalize(self.model_losses, 0.95) * tf.sqrt(1 - self.discount_factor ** 2)
+
+
+class MaximizeSparseJointAgentWorker(PEJointAgentWorker):
+    # def define_reward(self, percent):
+    #     normalized_model_losses = normalize(self.model_losses, 0.95)
+    #     scale = np.sqrt(2) * special.erfcinv(2 * percent / 100)
+    #     self.rewards = tf.floor(normalized_model_losses / scale) * tf.sqrt(1 - self.discount_factor ** 2)
+
+    def define_reward(self, limit):
+        normalized_model_losses = normalize(self.model_losses, 0.95)
+        self.rewards = tf.where(normalized_model_losses > limit,
+                                tf.ones_like(normalized_model_losses),
+                                tf.ones_like(normalized_model_losses) * (self.discount_factor - 1))
+        # self.rewards = tf.sigmoid((normalized_model_losses - limit))
 
 
 class TargetErrorJointAgentWorker(PEJointAgentWorker):
