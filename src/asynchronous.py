@@ -891,7 +891,7 @@ class PEEJointAgentWorker(JointAgentWorker):
         per_joint_model_losses = tf.reduce_mean((self.model_outputs - self.model_targets) ** 2, axis=-1)   # [BS, 4]
         self.model_losses = tf.reduce_mean(per_joint_model_losses, axis=-1)                                # [BS]
         self.model_loss = tf.reduce_mean(self.model_losses, name="loss")                                   # []
-        self.pee_model_losses = tf.reduce_mean((normalize(per_joint_model_losses, 0.95) - self.pee_model_outputs) ** 2, axis=-1)  # [BS]
+        self.pee_model_losses = tf.reduce_mean((normalize(tf.stop_gradient(per_joint_model_losses), 0.95) - self.pee_model_outputs) ** 2, axis=-1)  # [BS]
         self.pee_model_loss = tf.reduce_mean(self.pee_model_losses, name="pee_loss")                       # []
         self.define_reward(**self.reward_params)
         self.global_model_step = tf.Variable(0, dtype=tf.int32)
@@ -911,7 +911,7 @@ class PEEJointAgentWorker(JointAgentWorker):
     def define_reward(self):
         # reward_scale = (1 - self.discount_factor) / pee_model_loss_converges_to
         # self.rewards = reward_scale * self.pee_model_losses
-        self.rewards = normalize(self.model_losses, 0.95) * tf.sqrt(1 - self.discount_factor ** 2)
+        self.rewards = normalize(self.pee_model_losses, 0.95) * tf.sqrt(1 - self.discount_factor ** 2)
 
 
 class MinimizeJointAgentWorker(PEJointAgentWorker):
