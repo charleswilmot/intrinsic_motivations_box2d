@@ -1,5 +1,6 @@
 import os
 import argparse
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pickle
@@ -100,15 +101,20 @@ def plot_contact_freq(path, iteration, title, show=True, save=True):
     data = get_experiment_data(path, iteration)
     self_mean, ball_mean = process_data(data)
     X = np.arange(len(self_mean)) * 1000
-    plt.fill_between(X, self_mean, label="self contacts")
-    plt.fill_between(X, self_mean, ball_mean + self_mean, label="ball contacts")
-    plt.plot(X, self_mean, "k-")
-    plt.plot(X, self_mean + ball_mean, "k-")
+    plt.fill_between(X, self_mean, label="self contacts", color="b")
+    plt.fill_between(X, self_mean, ball_mean + self_mean, label="ball contacts", color="r")
+    plt.plot(X, self_mean, "k-", linewidth=3)
+    plt.plot(X, self_mean + ball_mean, "k-", linewidth=3)
     plt.title(title)
-    plt.legend()
+    plt.xlabel("Iteration")
+    plt.ylabel("Contact probability")
+    plt.ylim([0, 0.35])
+    if title == "minimize":
+        plt.legend()
     if show:
         plt.show()
     if save:
+        plt.tight_layout()
         plt.savefig(path + "/contacts_freq_{}.png".format(iteration))
     plt.clf()
 
@@ -123,6 +129,7 @@ def get_experiment_data(path, iteration):
     return data
 
 
+matplotlib.rc('font', weight='normal', size=20)
 args = parser.parse_args()
 if args.experiment is None and args.array is None:
     print("Must provide a path to an experiment or to an array")
