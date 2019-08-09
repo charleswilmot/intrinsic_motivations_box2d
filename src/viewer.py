@@ -517,6 +517,45 @@ class JointAgentWindow:
             self._fig_shawn = True
 
 
+class SkinAgentWindow:
+    def __init__(self, discount_factor, return_lookback=100):
+        self.fig = plt.figure()
+        self.iax_vision = VisionIAX(self.fig.add_subplot(221))
+        self.iax_return = OnlineReturnIAX(self.fig.add_subplot(222), discount_factor, return_lookback)
+        self.iax_tactile_true = TactileIAX(self.fig.add_subplot(223))
+        self.iax_tactile_target = TactileIAX(self.fig.add_subplot(224))
+        self.annotation = self.fig.text(0.5, 0.3, "None")
+        self._fig_shawn = False
+
+    def close(self):
+        plt.close(self.fig)
+
+    def set_vision_lim(self, *lim):
+        self.iax_vision.set_lim(*lim)
+
+    def set_return_lim(self, *lim):
+        self.iax_return.set_lim(*lim)
+
+    def set_return_range(self, *rnge):
+        self.iax_return.set_range(*rnge)
+
+    def set_tactile_lim(self, *lim):
+        self.iax_tactile.set_lim(*lim)
+
+    def __call__(self, vision, tactile_true, tactile_target, current_reward, predicted_return):
+        self.iax_vision(vision)
+        self.iax_return(current_reward, predicted_return)
+        self.iax_tactile_true(tactile_true)
+        self.iax_tactile_target(tactile_target)
+        self.annotation.set_text("{:.2f}".format(np.sum(np.abs(tactile_true - tactile_target))))
+        if self._fig_shawn:
+            self.fig.canvas.draw()
+            self.fig.canvas.flush_events()
+        else:
+            self.fig.show()
+            self._fig_shawn = True
+
+
 if __name__ == "__main__":
     path = "/tmp/record100ms_action3000ms/"
     display = DatabaseDisplay(path)
