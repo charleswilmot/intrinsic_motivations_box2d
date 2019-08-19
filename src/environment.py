@@ -101,49 +101,49 @@ class Environment(object):
                     self._joints_in_position_mode.remove(key)
                 self.joints[key].motorSpeed = np.float64(speeds[key])
 
-    def set_positions_old(self, positions):
-        for i, key in enumerate(self._joint_keys):
-            if key in positions:
-                self._joints_in_position_mode.add(key)
-                current = self.joints[key].angle
-                position = positions[key]
-                if self.joints[key].limitEnabled:
-                    pos = position
-                else:
-                    abs_position = (position % (2 * np.pi)) - np.pi
-                    abs_current = (current % (2 * np.pi)) - np.pi
-                    diff = abs_current - abs_position
-                    inner = abs(diff)
-                    outer = 2 * np.pi - inner
-                    if inner > outer:
-                        if diff > 0:
-                            delta = 2 * np.pi - inner
-                        else:
-                            delta = -2 * np.pi + inner
-                    else:
-                        if diff > 0:
-                            delta = -inner
-                        else:
-                            delta = inner
-                    pos = current + delta
-                self._buf_target_positions[i] = pos
-                self.joint_pids[key].setpoint = pos
-
-    def set_positions_old_but_not_so_old_but_still_old(self, positions):
-        threshold = 0.05
-        for i, key in enumerate(self._joint_keys):
-            if key in positions:
-                self._joints_in_position_mode.add(key)
-                pos = positions[key]
-                if self.joints[key].limitEnabled:
-                    min_lim, max_lim = self.joints[key].limits
-                    if pos < min_lim + threshold:
-                        pos = min_lim - threshold * threshold / (pos - 2 * threshold - min_lim)
-                    elif pos > max_lim - threshold:
-                        pos = max_lim - threshold * threshold / (pos + 2 * threshold - max_lim)
-                self._buf_target_positions[i] = pos
-                self.joint_pids[key].setpoint = pos
-        self._computed_discrete_target_positions = False
+    # def set_positions_old(self, positions):
+    #     for i, key in enumerate(self._joint_keys):
+    #         if key in positions:
+    #             self._joints_in_position_mode.add(key)
+    #             current = self.joints[key].angle
+    #             position = positions[key]
+    #             if self.joints[key].limitEnabled:
+    #                 pos = position
+    #             else:
+    #                 abs_position = (position % (2 * np.pi)) - np.pi
+    #                 abs_current = (current % (2 * np.pi)) - np.pi
+    #                 diff = abs_current - abs_position
+    #                 inner = abs(diff)
+    #                 outer = 2 * np.pi - inner
+    #                 if inner > outer:
+    #                     if diff > 0:
+    #                         delta = 2 * np.pi - inner
+    #                     else:
+    #                         delta = -2 * np.pi + inner
+    #                 else:
+    #                     if diff > 0:
+    #                         delta = -inner
+    #                     else:
+    #                         delta = inner
+    #                 pos = current + delta
+    #             self._buf_target_positions[i] = pos
+    #             self.joint_pids[key].setpoint = pos
+    #
+    # def set_positions_old_but_not_so_old_but_still_old(self, positions):
+    #     threshold = 0.05
+    #     for i, key in enumerate(self._joint_keys):
+    #         if key in positions:
+    #             self._joints_in_position_mode.add(key)
+    #             pos = positions[key]
+    #             if self.joints[key].limitEnabled:
+    #                 min_lim, max_lim = self.joints[key].limits
+    #                 if pos < min_lim + threshold:
+    #                     pos = min_lim - threshold * threshold / (pos - 2 * threshold - min_lim)
+    #                 elif pos > max_lim - threshold:
+    #                     pos = max_lim - threshold * threshold / (pos + 2 * threshold - max_lim)
+    #             self._buf_target_positions[i] = pos
+    #             self.joint_pids[key].setpoint = pos
+    #     self._computed_discrete_target_positions = False
 
     def set_positions(self, positions):
         threshold = 0.05
