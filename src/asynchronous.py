@@ -392,11 +392,7 @@ class Worker:
         self.return_targets = self.return_targets_not_bootstraped + increasing_discounted_gammas * tf.stop_gradient(self.critic_value[-1])
         self.critic_losses = (self.critic_value - self.return_targets) ** 2
         self.critic_loss = tf.reduce_mean(self.critic_losses, name="loss")
-        # BULLSHITING ???
-        # bounds = np.array([2.34, 2.34, 3.14, 3.14], dtype=np.float32)
-        # vals = [tf.linspace(-b, b, self.n_actions) for b in bounds]
-        # action_values = tf.stack(vals, axis=0)
-        # b = tf.constant(bounds)
+
         self.actions_indices = tf.placeholder(shape=[None, 4], dtype=tf.int32, name="actor_picked_actions")  # picked actions
         self.actor_targets = self.return_targets - tf.stop_gradient(self.critic_value)
         targets = tf.expand_dims(self.actor_targets, -1)
