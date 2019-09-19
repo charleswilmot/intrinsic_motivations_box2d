@@ -28,6 +28,6 @@ if __name__ == "__main__":
     with TemporaryDirectory() as tmppath:
         with Experiment(1, 1, tmppath + "/replay", args_env, args_worker, display_dpi=3) as experiment:
             experiment.restore_model(checkpoint_path)
-            experiment.restore_goals_warehouse(experiment_path + "goals/dumps/")
-            experiment.start_display_worker(training=True)
-            time.sleep(600)
+            experiment.restore_goal_library(experiment_path + "goals/dumps/")
+            experiment.start_display_worker(training=False)
+            time.sleep(60000)

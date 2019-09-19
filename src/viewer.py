@@ -524,7 +524,8 @@ class SkinAgentWindow:
         self.iax_return = OnlineReturnIAX(self.fig.add_subplot(222), discount_factor, return_lookback)
         self.iax_tactile_true = TactileIAX(self.fig.add_subplot(223))
         self.iax_tactile_target = TactileIAX(self.fig.add_subplot(224))
-        self.annotation = self.fig.text(0.5, 0.3, "None")
+        self.annotation = self.fig.text(0.1, 0.05, "")
+        self.probability = self.fig.text(0.5, 0.05, "")
         self._fig_shawn = False
 
     def close(self):
@@ -542,12 +543,16 @@ class SkinAgentWindow:
     def set_tactile_lim(self, *lim):
         self.iax_tactile.set_lim(*lim)
 
-    def __call__(self, vision, tactile_true, tactile_target, current_reward, predicted_return):
+    def __call__(self, vision, tactile_true, tactile_target, current_reward, predicted_return, reaching_probability=None):
         self.iax_vision(vision)
         self.iax_return(current_reward, predicted_return)
         self.iax_tactile_true(tactile_true)
         self.iax_tactile_target(tactile_target)
-        self.annotation.set_text("{:.2f}".format(np.sum(np.abs(tactile_true - tactile_target))))
+        self.annotation.set_text("Distance to goal: {:.2f}".format(np.sum(np.abs(tactile_true - tactile_target))))
+        if reaching_probability is not None:
+            self.probability.set_text("Reaching probability: {:.2f}".format(reaching_probability))
+        else:
+            self.probability.set_text("")
         if self._fig_shawn:
             self.fig.canvas.draw()
             self.fig.canvas.flush_events()

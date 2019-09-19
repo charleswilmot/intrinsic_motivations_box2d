@@ -6,18 +6,18 @@ def goals_match(goals0, goals1):
     return np.sum(np.abs(goals0 - goals1), axis=-1) < 0.9
 
 
-class GoalWarehouse:
-    def __init__(self, warehouse_size, goal_size, ema_speed):
+class GoalLibrary:
+    def __init__(self, library_size, goal_size, ema_speed):
         self.dtgoal = np.dtype(
             [("intensities", np.float32, goal_size),
              ("r|p", np.float32),
              ("r|~p", np.float32),
              ("delta_r|p", np.float32)])
-        self.goals = np.zeros(warehouse_size, dtype=self.dtgoal)
+        self.goals = np.zeros(library_size, dtype=self.dtgoal)
         self.goals[0] = np.array((np.zeros(goal_size), 1, 1, 0), dtype=self.dtgoal)
         self.ema_speed = ema_speed
         self._n_goals = 1
-        self._warehouse_size = warehouse_size
+        self._library_size = library_size
         self._total_adds = 0
 
     def add_goals(self, goals, pursued):
@@ -47,8 +47,8 @@ class GoalWarehouse:
         for index in all_goals_reached_indices:
             if index != index_current_goal:
                 self.goals[index]["r|~p"] += 1 - self.ema_speed
-        # if no goals were reached and the warehouse is not full, add the tactile as a goal
-        if self._n_goals < self._warehouse_size and all_goals_reached_indices.shape[0] == 0:
+        # if no goals were reached and the library is not full, add the tactile as a goal
+        if self._n_goals < self._library_size and all_goals_reached_indices.shape[0] == 0:
             self.goals[self._n_goals] = np.array(
                 (tactile,
                  1 / self._total_adds,
@@ -78,10 +78,10 @@ class GoalWarehouse:
         return string
 
 if __name__ == "__main__":
-    warehouse_size = 45
+    library_size = 45
     goal_size = 10
     ema_speed = 0.995
-    gw = GoalWarehouse(warehouse_size, goal_size, ema_speed)
+    gw = GoalLibrary(library_size, goal_size, ema_speed)
 
     for j in range(10):
         for i in range(100):
@@ -132,8 +132,8 @@ if __name__ == "__main__":
     #     for index in all_goals_reached_indices:
     #         if index != index_current_goal:
     #             self.goals[index]["r|~p"] += 1 - self.ema_speed
-    #     # if no goals were reached and the warehouse is not full, add the tactile as a goal
-    #     if self._n_goals < self._warehouse_size and all_goals_reached_indices.shape[0] == 0:
+    #     # if no goals were reached and the library is not full, add the tactile as a goal
+    #     if self._n_goals < self._library_size and all_goals_reached_indices.shape[0] == 0:
     #         self.goals[self._n_goals] = np.array(
     #             (tactile,
     #              1 / self._total_adds,
@@ -164,8 +164,8 @@ if __name__ == "__main__":
     #     for index in all_goals_reached_indices:
     #         if index != index_current_goal:
     #             self.goals[index]["not_pursued"] += 1 - self.ema_speed
-    #     # if no goals were reached and the warehouse is not full, add the tactile as a goal
-    #     if self._n_goals < self._warehouse_size and all_goals_reached_indices.shape[0] == 0:
+    #     # if no goals were reached and the library is not full, add the tactile as a goal
+    #     if self._n_goals < self._library_size and all_goals_reached_indices.shape[0] == 0:
     #         self.goals[self._n_goals] = np.array(
     #             (tactile,
     #              1 / self._total_adds,

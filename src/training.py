@@ -141,7 +141,7 @@ if __name__ == "__main__":
         '-ema', '--ema-speed',
         type=float,
         default=0.999,
-        help="Exponential moving average speed for the goal library (goal warehouse)."
+        help="Exponential moving average speed for the goal library (goal library)."
     )
 
     args = parser.parse_args()
@@ -168,8 +168,7 @@ if __name__ == "__main__":
         args.softmax_temperature,         # softmax_temperature
         args.buffer_size,                 # replay_buffer_size
         args.updates_per_episode,         # updates_per_episode
-        args.her_strategy,                # HER_strategy
-        args.ema_speed                    # EMA speed
+        args.her_strategy                 # HER_strategy
     ]
 
     with Experiment(
@@ -181,16 +180,22 @@ if __name__ == "__main__":
             display_dpi=3) as experiment:
         if args.restore_from:
             experiment.restore_model(args.restore_from)
-            experiment.restore_goals_warehouse(args.restore_from + "/../../goals/dumps/")
+            experiment.restore_goal_library(args.restore_from + "/../../goals/dumps/worker_0.pkl")
         if args.display:
             experiment.start_display_worker(training=True)
         if args.tensorboard:
             experiment.start_tensorboard()
+        experiment.randomize_env(n=100)
         for i in range(args.n_trajectories // args.flush_every):
-            experiment.asynchronously_train(args.flush_every, train_actor=(i > 20000 // args.flush_every))
-            experiment.take_goals_warehouse_snapshot()
+            experiment.asynchronously_train(args.flush_every)
+            experiment.take_goal_library_snapshot()
             if (i + 1) % 10 == 0:
-                experiment.print_goal_warehouse()
-                experiment.dump_goals_warehouse()
+                experiment.print_goal_library()
+                experiment.dump_goal_library()
             if (i + 1) % 100 == 0:
                 experiment.save_model()
+        experiment.take_goal_library_snapshot()
+        experiment.print_goal_library()
+        experiment.dump_goal_library()
+        experiment.save_model()
+        

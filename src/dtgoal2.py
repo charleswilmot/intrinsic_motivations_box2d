@@ -7,21 +7,21 @@ import pickle
 import matplotlib.pyplot as plt
 
 
-class GoalWarehouse:
-    def __init__(self, warehouse_size, goal_size, ema_speed):
+class GoalLibrary:
+    def __init__(self, library_size, goal_size, ema_speed):
         self.dtgoal = np.dtype(
             [("intensities", np.float32, goal_size),
              ("r|p", np.float32),
              ("r|~p", np.float32),
              ("delta_r|p", np.float32)])
-        self.goals = np.zeros(warehouse_size, dtype=self.dtgoal)
-        self._vision_related_to_the_goals = [None] * warehouse_size
+        self.goals = np.zeros(library_size, dtype=self.dtgoal)
+        self._vision_related_to_the_goals = [None] * library_size
         self.goals[0] = np.array((np.zeros(goal_size), 1, 1, 0), dtype=self.dtgoal)
         self.ema_speed = ema_speed
         self.ema_speed_slow = self.ema_speed ** (1 / 4)
         self.snapshots = {}
         self._n_goals = 1
-        self._warehouse_size = warehouse_size
+        self._library_size = library_size
         self._total_adds = 0
 
     def add_goals(self, goals, pursued):
@@ -51,8 +51,8 @@ class GoalWarehouse:
         for index in all_goals_reached_indices:
             if index != index_current_goal:
                 self.goals[index]["r|~p"] += 1 - self.ema_speed_slow
-        # if no goals were reached and the warehouse is not full, add the tactile as a goal
-        if self._n_goals < self._warehouse_size and all_goals_reached_indices.shape[0] == 0:
+        # if no goals were reached and the library is not full, add the tactile as a goal
+        if self._n_goals < self._library_size and all_goals_reached_indices.shape[0] == 0:
             self.goals[self._n_goals] = np.array(
                 (tactile,
                  0, # 1 / self._total_adds,
@@ -65,11 +65,46 @@ class GoalWarehouse:
     def find(self, goal):
         return np.where(discretization.np_discretization_reward(self.goals[:self._n_goals]["intensities"], goal))[0]
 
+    def index_of(self, goal):
+        if self._n_goals == 0:
+            return 0
+        return np.argmax(discretization.np_discretization_reward(self.goals[:self._n_goals]["intensities"], goal) == 1)
+
     def select_goal_uniform(self):
         if self._n_goals == 1:
-            return self.goals[0]["intensities"]
+            return 0, self.goals[0]["intensities"]
         index = np.random.randint(1, self._n_goals)
-        return self.goals[index]["intensities"]
+        return index, self.goals[index]["intensities"]
+
+    def select_goal_uniform_learned_only(self, min_prob=0.0005):
+        if self._n_goals == 1:
+            return 0, self.goals[0]["intensities"]
+        p = np.zeros(self._n_goals)
+        p[self.goals[:self._n_goals]["r|p"] > min_prob] = 1
+        p[0] = 0
+        s = np.sum(p)
+        if s != 0:
+            p /= s
+        else:
+            p[:] = 1 / self._n_goals
+        goal_index = np.random.choice(self._n_goals, p=p)
+        goal = self.goals[goal_index]["intensities"]
+        return goal_index, goal
+
+    def select_goal_uniform_exclude_unreachable(self, min_prob=0.0005):
+        if self._n_goals == 1:
+            return 0, self.goals[0]["intensities"]
+        p = np.zeros(self._n_goals)
+        p[self.goals[:self._n_goals]["r|~p"] > min_prob] = 1
+        p[0] = 0
+        s = np.sum(p)
+        if s != 0:
+            p /= s
+        else:
+            p[:] = 1 / self._n_goals
+        goal_index = np.random.choice(self._n_goals, p=p)
+        goal = self.goals[goal_index]["intensities"]
+        return goal_index, goal
 
     def _get_learning_potential_probs(self, temperature=0.015, min_reach_prob=0.001):
         where = np.where(np.logical_or(
@@ -91,13 +126,15 @@ class GoalWarehouse:
 
     def select_goal_learning_potential(self, temperature=0.001, min_reach_prob=0.005):
         if self._n_goals == 1:
-            return self.goals[0]["intensities"]
+            return 0, self.goals[0]["intensities"]
         p = self._get_learning_potential_probs(temperature, min_reach_prob)
-        return np.random.choice(self.goals[:self._n_goals], p=p)["intensities"]
+        goal_index = np.random.choice(self._n_goals, p=p)
+        goal = self.goals[goal_index]["intensities"]
+        return goal_index, goal
 
     def save_vision(self, path):
         os.mkdir(path)
-        with open(path + "/warehouse.txt", "w") as f:
+        with open(path + "/library.txt", "w") as f:
             f.write(str(self))
         for i, data in enumerate(self._vision_related_to_the_goals[1:self._n_goals]):
             data = data.reshape((data.shape[0], -1))
@@ -109,6 +146,9 @@ class GoalWarehouse:
     def dump(self, path):
         with open(path, "wb") as f:
             pickle.dump(self, f)
+
+    def goal_info(self, goal_index):
+        return self.goals[goal_index]
 
     def plot_per_goal(self, path, name):
         fig     = plt.figure()
@@ -156,6 +196,10 @@ class GoalWarehouse:
         ax_vision.set_yticks([], [])
         ax_tactile.set_yticks([], [])
         ax_tactile.set_ylim([0, 1])
+        ax_rp.set_ylabel("r|p")
+        ax_rnp.set_ylabel("r|~p")
+        ax_drp.set_ylabel("delta r|p")
+        ax_diff.set_ylabel("diff")
 
     def __str__(self):
         string = ""
@@ -173,10 +217,10 @@ class GoalWarehouse:
 
 
 if __name__ == "__main__":
-    warehouse_size = 45
+    library_size = 45
     goal_size = 10
     ema_speed = 0.995
-    gw = GoalWarehouse(warehouse_size, goal_size, ema_speed)
+    gw = GoalLibrary(library_size, goal_size, ema_speed)
 
     for j in range(10):
         for i in range(100):
@@ -227,8 +271,8 @@ if __name__ == "__main__":
     #     for index in all_goals_reached_indices:
     #         if index != index_current_goal:
     #             self.goals[index]["r|~p"] += 1 - self.ema_speed
-    #     # if no goals were reached and the warehouse is not full, add the tactile as a goal
-    #     if self._n_goals < self._warehouse_size and all_goals_reached_indices.shape[0] == 0:
+    #     # if no goals were reached and the library is not full, add the tactile as a goal
+    #     if self._n_goals < self._library_size and all_goals_reached_indices.shape[0] == 0:
     #         self.goals[self._n_goals] = np.array(
     #             (tactile,
     #              1 / self._total_adds,
@@ -259,8 +303,8 @@ if __name__ == "__main__":
     #     for index in all_goals_reached_indices:
     #         if index != index_current_goal:
     #             self.goals[index]["not_pursued"] += 1 - self.ema_speed
-    #     # if no goals were reached and the warehouse is not full, add the tactile as a goal
-    #     if self._n_goals < self._warehouse_size and all_goals_reached_indices.shape[0] == 0:
+    #     # if no goals were reached and the library is not full, add the tactile as a goal
+    #     if self._n_goals < self._library_size and all_goals_reached_indices.shape[0] == 0:
     #         self.goals[self._n_goals] = np.array(
     #             (tactile,
     #              1 / self._total_adds,

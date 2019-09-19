@@ -7,11 +7,6 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
 
-    default_clr = 1e-4
-    default_alr = 1e-5
-    default_discount_factor = 0.5
-    default_er = 0.01
-
     parser.add_argument(
         'input_path',
         type=str,

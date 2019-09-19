@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 import png
 import environment
 from replay_buffer import Buffer
-from dtgoal2 import GoalWarehouse
+from goal_library import GoalLibrary
 import discretization
 import socket
 import multiprocessing
@@ -51,11 +51,13 @@ def get_cluster(n_parameter_servers, n_workers):
     for i in range(n_parameter_servers):
         if "ps" not in spec:
             spec["ps"] = []
-        spec["ps"].append("localhost:{}".format(i + port))
+        port = get_available_port(port + 1)
+        spec["ps"].append("localhost:{}".format(port))
     for i in range(n_workers):
         if "worker" not in spec:
             spec["worker"] = []
-        spec["worker"].append("localhost:{}".format(i + port + n_parameter_servers))
+        port = get_available_port(port + 1)
+        spec["worker"].append("localhost:{}".format(port))
     return tf.train.ClusterSpec(spec)
 
 
@@ -74,7 +76,7 @@ def get_available_port(start_port=6006):
 class Worker:
     def __init__(self, task_index, pipe, env, cluster, logdir, discount_factor, sequence_length,
                  critic_lr, actor_lr, entropy_coef, softmax_temperature, replay_buffer_size, updates_per_episode,
-                 HER_strategy, goals_warehouse_ema_speed):
+                 HER_strategy, goal_library):
         self.task_index = task_index
         self.cluster = cluster
         self._n_workers = self.cluster.num_tasks("worker") - 1
@@ -89,6 +91,8 @@ class Worker:
         self.critic_lr = critic_lr
         self.actor_lr = actor_lr
         self.entropy_coef = entropy_coef
+        self.epsilon_init = 0.05
+        self.epsilon_decay = 1
         self.softmax_temperature = softmax_temperature
         self.replay_buffer_size = replay_buffer_size
         self.updates_per_episode = updates_per_episode
@@ -99,27 +103,28 @@ class Worker:
              ("all", np.float32),
              ("pursued", np.float32),
              ("not_pursued", np.float32)])
-        max_goals = 1000
-        self.n_goals = 0
         self.actions_ground_to_arm = np.linspace(-3.14, 3.14, self.n_actions)
         self.actions_arm_to_arm = np.linspace(-2.7, 2.7, self.n_actions)
         self.pipe = pipe
         self.replay_buffer = Buffer(self.replay_buffer_size)
         p, s, t = self.get_state()
         self._p_size, self._s_size, self._t_size = p.shape, s.shape, t.shape
-        self.goal_temperature = 0.015
-        self.goals_warehouse_ema_speed = goals_warehouse_ema_speed
-        self.goals_warehouse = GoalWarehouse(100, self._t_size[0], goals_warehouse_ema_speed)
+
+        self.goal_library = goal_library
+        self.goal_library_size = self.goal_library.library_size
+        self.goal_library_ema_speed = self.goal_library.ema_speed
         self.define_networks()
         # graph = tf.get_default_graph() if task_index == 0 else None
         graph = None
         self.summary_writer = tf.summary.FileWriter(self.logdir + "/worker{}".format(task_index), graph=graph)
         self.saver = tf.train.Saver()
+        self._initializer = tf.global_variables_initializer()
+        self._report_non_initialized = tf.report_uninitialized_variables()
         self.sess = tf.Session(target=self.server.target)
-        if task_index == 0 and len(self.sess.run(tf.report_uninitialized_variables())) > 0:  # todo: can be done in Experiment
-            self.sess.run(tf.global_variables_initializer())
-            print("{}  variables initialized".format(self.name))
 
+    def initialize(self):
+        self.sess.run(self._initializer)
+        print("{}  variables initialized".format(self.name))
 
     def actions_dict_from_indices(self, actions):
         return {
@@ -130,7 +135,7 @@ class Worker:
         }
 
     def wait_for_variables_initialization(self):
-        while len(self.sess.run(tf.report_uninitialized_variables())) > 0:
+        while len(self.sess.run(self._report_non_initialized)) > 0:
             print("{}  waiting for variable initialization...".format(self.name))
             time.sleep(1)
 
@@ -158,30 +163,34 @@ class Worker:
         while global_step < n_updates - self._n_workers:
             # Collect some experience
             # returns a trajectory return (state_positions, state_speeds, state_tactile), goals, actions, rewards
-            states, goals, actions, rewards = self.run_n_steps()
+            states, goals, goal_index, actions, rewards = self.run_n_steps()
             # Place in buffer
             if self.HER_strategy.lower() == "none":
-                self.replay_buffer.incorporate((states, goals, actions, rewards))
+                self.replay_buffer.incorporate((states, goals, index, actions, rewards))
             elif self.HER_strategy.lower() == "first_contact":
                 for tactile in states[2]:
                     if np.sum(tactile) > 0:
+                        faked_index = self.goal_library.index_of(tactile)
                         faked_goals = np.repeat(tactile, self.sequence_length, 0)
                         faked_rewards = np_discretization_reward(states[2], faked_goals)
-                        self.replay_buffer.incorporate((states, faked_goals, actions, faked_rewards))
+                        self.replay_buffer.incorporate((states, faked_goals, faked_index, actions, faked_rewards))
                         break
             elif self.HER_strategy.lower() == "all_contacts":
+                index_done = set()
                 for tactile in states[2]:
                     if np.sum(tactile) > 0:
-                        faked_goals = np.repeat(tactile[np.newaxis, :], self.sequence_length, 0)
-                        faked_rewards = np_discretization_reward(states[2], faked_goals)
-                        self.replay_buffer.incorporate((states, faked_goals, actions, faked_rewards))
+                        faked_index = self.goal_library.index_of(tactile)
+                        if faked_index not in index_done:
+                            index_done.add(faked_index)
+                            faked_goals = np.repeat(tactile[np.newaxis, :], self.sequence_length, 0)
+                            faked_rewards = np_discretization_reward(states[2], faked_goals)
+                            self.replay_buffer.incorporate((states, faked_goals, faked_index, actions, faked_rewards))
             elif self.HER_strategy.lower() == "something_else":
                 raise NotImplementedError("not implemented")
-                pass
             # Update the global networks
             trajectories = self.replay_buffer.batch(self.updates_per_episode)
             for trajectory in trajectories:
-                global_step = self.update_reinforcement_learning(*trajectory, train_actor=train_actor)
+                global_step = self.update_reinforcement_learning(*trajectory)
                 if global_step >= n_updates - self._n_workers:
                     break
         self.summary_writer.flush()
@@ -199,9 +208,9 @@ class Worker:
         self.pipe.recv()  # done
         self.pipe.send("{} (display) going IDLE".format(self.name))
 
-    def print_goal_warehouse(self):
-        self.goals_warehouse.print_with_header("{} goal warehouse:".format(self.name))
-        self.pipe.send("{} printed goal warehouse".format(self.name))
+    def print_goal_library(self):
+        self.goal_library.print_with_header("{} goal library:".format(self.name))
+        self.pipe.send("{} printed goal library".format(self.name))
 
     def run_video(self, path, n_sequences, training=True):
         start_index = 0
@@ -213,99 +222,128 @@ class Worker:
             os.system("ffmpeg -loglevel panic -r 24 -i {}/frame_%06d.png -vcodec mpeg4 -b 100000 -y {}".format(tmppath, path))
         self.pipe.send("{} saved video under {}".format(self.name, path))
 
-    def take_goals_warehouse_snapshot(self):
+    def take_goal_library_snapshot(self):
         iteration = self.sess.run(self.global_step)
-        self.goals_warehouse.take_snapshot(iteration)
-        self.pipe.send("{} took a snapshot of the goal warehouse".format(self.name))
+        self.goal_library.take_snapshot(iteration)
+        self.pipe.send("{} took a snapshot of the goal library".format(self.name))
 
-    def restore_goals_warehouse(self, path):
-        with open(path + "/worker_{}.pkl".format(self.task_index), "rb") as f:
-            self.goals_warehouse = pickle.load(f)
-        self.pipe.send("{} restored the goal warehouse".format(self.name))
+    def restore_goal_library(self, path):
+        self.goal_library.restore(path)
+        self.pipe.send("{} restored the goal library".format(self.name))
 
-    def dump_goals_warehouse(self, path):
-        self.goals_warehouse.dump(path + "/worker_{}.pkl".format(self.task_index))
-        self.pipe.send("{} saved warehouse under {}".format(self.name, path))
+    def dump_goal_library(self, path):
+        self.goal_library.dump(path + "/worker_{}.pkl".format(self.task_index))
+        self.pipe.send("{} saved library under {}".format(self.name, path))
 
     def save_contact_logs(self, name):
         path = self.logdir + "/worker{}/contacts_{}.pkl".format(self.task_index, name)
         self.env.save_contact_logs(path)
         self.pipe.send("{} saved contact logs under {}".format(self.name, path))
 
-    def get_action(self, goals):
-        feed_dict = self.to_feed_dict(states=self.get_state(True), goals=goals)
-        action = self.sess.run(self.action_applied_in_env, feed_dict=feed_dict)
+    def get_action(self, goal_index):
+        feed_dict = self.to_feed_dict(states=self.get_state(True))
+        action = self.sess.run(self.goal_tensors[goal_index]["sampled_actions_indices"], feed_dict=feed_dict)
         return action[0]
+
+    def populate_goal_library(self):
+        no_goal = np.zeros(self._t_size)
+        while(self.goal_library._n_goals < self.goal_library_size):
+            before = self.goal_library._n_goals
+            action = np.random.randint(0, self.n_actions, 4)
+            self.env.set_positions(self.actions_dict_from_indices(action))
+            self.env.env_step()
+            self.goal_library.register_goal(
+                observed_goal=self.env.tactile,
+                pursued_goal=no_goal,
+                vision=self.env.vision)  # point is to have a snapshot of the contact stored in the library
+            after = self.goal_library._n_goals
+            if before != after:
+                print("{} populating goal library: {: 4d} / {: 4d}".format(self.name, after, self.goal_library_size))
+        self.pipe.send("{} goal library full".format(self.name))
 
     def run_n_steps(self):
         state_positions = np.zeros((self.sequence_length, ) + self._p_size)
         state_speeds = np.zeros((self.sequence_length, ) + self._s_size)
         state_tactile = np.zeros((self.sequence_length, ) + self._t_size)
-        goal = self.goals_warehouse.select_goal_learning_potential(self.goal_temperature)
+        # goal_index, goal = self.goal_library.select_goal_learning_potential(self.goal_temperature)
+        goal_index, goal = self.goal_library.select_goal_uniform_reachable_only()
         goals = np.repeat(goal[np.newaxis, :], self.sequence_length, 0)
         actions = np.zeros((self.sequence_length, 4))
         rewards = np.zeros((self.sequence_length, ))
         for iteration in range(self.sequence_length):
             # get action
-            action = self.get_action(goals[:1])
+            action = self.get_action(goal_index)
             actions[iteration] = action
             # set action
             self.env.set_positions(self.actions_dict_from_indices(action))
             # get states
             state_positions[iteration], state_speeds[iteration], state_tactile[iteration] = self.get_state()
-            reward = self.goals_warehouse.add_goal(
-                state_tactile[iteration],
-                current_goal=goal,
-                vision=self.env.vision)  # point is to have a snapshot of the contact stored in the warehouse
+            reward = self.goal_library.register_goal(
+                observed_goal=state_tactile[iteration],
+                pursued_goal=goal,
+                vision=self.env.vision)  # point is to have a snapshot of the contact stored in the library
             rewards[iteration] = reward  # different way of computing the reward (numpy vs tensorflow) see run_n_display_steps
             # run environment step
             self.env.env_step()
         self.randomize_env()
-        return (state_positions, state_speeds, state_tactile), goals, actions, rewards
+        return (state_positions, state_speeds, state_tactile), goals, goal_index, actions, rewards
 
-    def randomize_env(self):
-        for i in range(2):
+    def randomize_env(self, n=None, _answer=False):
+        n = 5 if n is None else n
+        for i in range(n):
             action = np.random.randint(0, self.n_actions, 4)
             self.env.set_positions(self.actions_dict_from_indices(action))
             self.env.env_step()
+        if _answer:
+            self.pipe.send("{} applied {} random actions".format(self.name, n))
 
     def run_n_display_steps(self, win, training=True):
-        fetches = [self.action_applied_in_env if training else self.greedy_actions_indices, self.critic_value, self.rewards]
         rewards = np.zeros(self.sequence_length)
-        goal = self.goals_warehouse.select_goal_learning_potential(self.goal_temperature)
-        goals = goal[np.newaxis, :]
+        # goal_index, goal = self.goal_library.select_goal_learning_potential(self.goal_temperature)
+        goal_index, goal = self.goal_library.select_goal_uniform_learned_only(min_prob=0.07)
+        reaching_probability = self.goal_library.goal_info(goal_index)["r|p"]
+        if training:
+            action_fetches = self.goal_tensors[goal_index]["sampled_actions_indices"]
+        else:
+            action_fetches = self.goal_tensors[goal_index]["greedy_actions_indices"]
+        critic_fetches = self.goal_tensors[goal_index]["critic_out"]
+        fetches = [action_fetches, critic_fetches]
         for i in range(self.sequence_length):
-            feed_dict = self.to_feed_dict(states=self.get_state(True), goals=goals)
-            actions, predicted_returns, reward = self.sess.run(fetches, feed_dict=feed_dict)
+            feed_dict = self.to_feed_dict(states=self.get_state(True))
+            actions, predicted_returns = self.sess.run(fetches, feed_dict=feed_dict)
             action = actions[0]
-            rewards[i] = reward[0]
+            rewards[i] = discretization.np_discretization_reward(self.env.tactile, goal)
             # set positions in env
             self.env.set_positions(self.actions_dict_from_indices(action))
             # run action in env
             self.env.env_step()
             # get current vision
-            self.goals_warehouse.add_goal(
-                self.env.tactile,
-                current_goal=goal,
-                vision=self.env.vision)  # point is to have a snapshot of the contact stored in the warehouse
+            self.goal_library.register_goal(
+                observed_goal=self.env.tactile,
+                pursued_goal=goal,
+                vision=self.env.vision)  # point is to have a snapshot of the contact stored in the library
             vision = self.env.vision
             tactile_true = self.env.tactile
-            tactile_target = goals[0]
             current_reward = rewards[i]
-            predicted_return = predicted_returns[0]
+            predicted_return = np.max(predicted_returns)
             # display
-            win(vision, tactile_true, tactile_target, current_reward, predicted_return)
+            win(vision, tactile_true, goal, current_reward, predicted_return, reaching_probability=reaching_probability)
 
     def save_vision_related_to_goals(self, goaldir):
         # func : i, data -> action
-        self.goals_warehouse.save_vision(goaldir + "/worker{}/".format(self.task_index))
-        self.pipe.send("{} saved vision related to the goals in the goals warehouse".format(self.name))
+        self.goal_library.save_vision(goaldir + "/worker{}/".format(self.task_index))
+        self.pipe.send("{} saved vision related to the goals in the goals library".format(self.name))
 
     def run_n_video_steps(self, path, start_index, training=True):
-        action_fetches = self.action_applied_in_env if training else self.greedy_actions
-        goals = self.goals_warehouse.select_goal_learning_potential(self.goal_temperature)[np.newaxis, :]
+        # goal_index, goal = self.goal_library.select_goal_learning_potential(self.goal_temperature)
+        goal_index, goal = self.goal_library.select_goal_uniform_reachable_only()
+        goals = goal[np.newaxis, :]
+        if training:
+            action_fetches = self.goal_tensors[goal_index]["sampled_actions_indices"]
+        else:
+            action_fetches = self.goal_tensors[goal_index]["greedy_actions_indices"]
         for i in range(self.sequence_length):
-            feed_dict = self.to_feed_dict(states=self.get_state(True), goals=goals)
+            feed_dict = self.to_feed_dict(states=self.get_state(True))
             actions = self.sess.run(action_fetches, feed_dict=feed_dict)
             action = actions[0]
             # set positions in env
@@ -328,143 +366,120 @@ class Worker:
             returns[i] = prev_return
         return returns
 
-    def update_reinforcement_learning(self, states, goals, actions, rewards, train_actor=True):
-        ### Placeholders:
-        # self.inp_discrete_positions
-        # self.inp_discrete_speeds
-        # self.inp_tactile
-        # self.inp_goals
-        # self.return_targets_not_bootstraped
-        # self.actions_indices
+    def update_reinforcement_learning(self, states, goals, goal_index, actions, rewards):
         state_positions, state_speeds, state_tactile = states
-        feed_dict = self.to_feed_dict(states=states, goals=goals, actions=actions, rewards=rewards)
-        if train_actor:
-            fetches = [self.global_step_inc, self.critic_train_op, self.actor_train_op, self.rl_summary]
-            global_step, _, _, summary = self.sess.run(fetches, feed_dict=feed_dict)
-        else:
-            fetches = [self.global_step_inc, self.critic_train_op, self.rl_summary]
-            global_step, _, summary = self.sess.run(fetches, feed_dict=feed_dict)
+        feed_dict = self.to_feed_dict(states=states, actions=actions, rewards=rewards)
+        fetches = [
+            self.global_step_inc,
+            self.goal_tensors[goal_index]["train_op"],
+            self.goal_tensors[goal_index]["summary"]]
+        global_step, _, summary = self.sess.run(fetches, feed_dict=feed_dict)
         self.summary_writer.add_summary(summary, global_step=global_step)
         if global_step % 100 == 0:
             print("{} finished update number {}".format(self.name, global_step))
         return global_step
 
+    def define_goal_network(self, goal_index):
+        print("{} defining network for goal {}".format(self.name, goal_index))
+        critic_outs, greedy, sampled, all_losses, total_loss = [], [], [], [], 0
+        for j in range(4):
+            prev_layer = self.rl_inputs
+            for i, d in zip(range(3), [60, 60, self.n_actions]):
+                activation_fn = lrelu if i < 2 else None
+                prev_layer = tl.fully_connected(prev_layer, d, scope="goal{}_joint{}_layer{}".format(goal_index, j, i), activation_fn=activation_fn)
+            out_layer = prev_layer
+            # ACTIONS
+            greedy_actions_indices = tf.argmax(out_layer, axis=-1)
+            condition = tf.greater(tf.random_uniform(shape=(self.batch_size,)), self.epsilon)
+            random = tf.random_uniform(shape=(self.batch_size,), maxval=self.n_actions, dtype=tf.int64)
+            sampled_actions_indices = tf.where(condition, x=greedy_actions_indices, y=random)
+            # LOSSES
+            start = tf.reduce_max(out_layer[-1])
+            returns = self.returns_not_bootstraped + self.increasing_discounted_gammas * tf.stop_gradient(start)
+            critic_values_picked_actions = tf.gather_nd(out_layer, self.indices_actions_tab[j])
+            losses = (critic_values_picked_actions - returns) ** 2
+            mask = self.action_mask[j]
+            stay_the_same_loss = mask * (out_layer - tf.stop_gradient(out_layer)) ** 2
+            loss = (tf.reduce_sum(losses) + tf.reduce_sum(stay_the_same_loss)) / self.n_actions
+            # STORE
+            critic_outs.append(out_layer)
+            greedy.append(greedy_actions_indices)
+            sampled.append(sampled_actions_indices)
+            all_losses.append(loss)
+        losses = tf.stack(all_losses, axis=0)
+        loss = tf.reduce_sum(losses)
+        # SUMMARIES
+        loss_summary = tf.summary.scalar("/{}/loss_all".format(goal_index), loss)
+        joint_loss_summary_0 = tf.summary.scalar("/{}/loss_0".format(goal_index), all_losses[0])
+        joint_loss_summary_1 = tf.summary.scalar("/{}/loss_1".format(goal_index), all_losses[1])
+        joint_loss_summary_2 = tf.summary.scalar("/{}/loss_2".format(goal_index), all_losses[2])
+        joint_loss_summary_3 = tf.summary.scalar("/{}/loss_3".format(goal_index), all_losses[3])
+        summary = tf.summary.merge([
+            loss_summary,
+            joint_loss_summary_0,
+            joint_loss_summary_1,
+            joint_loss_summary_2,
+            joint_loss_summary_3])
+        self.goal_tensors[goal_index] = {
+            "critic_out": tf.stack(critic_outs, axis=1),
+            "greedy_actions_indices": tf.stack(greedy, axis=1),
+            "sampled_actions_indices": tf.stack(sampled, axis=1),
+            "losses": losses,
+            "loss": loss,
+            "train_op": tf.train.AdamOptimizer(self.critic_lr).minimize(loss),
+            "summary": summary
+        }
+
     def define_networks(self):
-        #############################
-        # MUST DEFINE : #############
-        #############################
-        # self.sampled_actions
-        # self.greedy_actions
-        # self.critic_value
-        # self.critic_loss
-        # self.actor_loss
-        # self.rl_train_op
-        # self.critic_train_op
-        # self.global_step
-        # self.rl_summary
-        # PLACEHOLDERS : ############
-        # self.rl_inputs
-        # self.actions
-        # self.return_targets_not_bootstraped
-        #############################
-        critic_net_dim = [None, 200, 200, 1]
         self.inp_discrete_positions = tf.placeholder(shape=(None, ) + self._p_size, dtype=tf.float32)
         self.inp_discrete_speeds = tf.placeholder(shape=(None, ) + self._s_size, dtype=tf.float32)
         self.inp_tactile = tf.placeholder(shape=(None, ) + self._t_size, dtype=tf.float32)
-        self.inp_goals = tf.placeholder(shape=(None, ) + self._t_size, dtype=tf.float32)
-        self.rewards = discretization.tf_discretization_reward(self.inp_goals, self.inp_tactile)
+        self.actions_indices_placeholder = tf.placeholder(shape=(None, 4), dtype=tf.int32)
         self.rl_inputs = tf.concat(
             [tf.reshape(self.inp_discrete_positions, (-1, np.prod(self._p_size))),
              tf.reshape(self.inp_discrete_speeds, (-1, np.prod(self._s_size))),
-             self.inp_tactile,
-             self.inp_goals],
+             self.inp_tactile],
             axis=-1)
-        self.return_targets_not_bootstraped = tf.placeholder(shape=[None], dtype=tf.float32, name="returns_target")
+        self.batch_size = tf.shape(self.rl_inputs)[0]
+        self.returns_not_bootstraped = tf.placeholder(shape=[None], dtype=tf.float32, name="returns_target")
         batch_size = tf.shape(self.rl_inputs)[0]
-        batch_size_64 = tf.cast(batch_size, tf.int64)
         constant_gammas = tf.fill(dims=[batch_size], value=self.discount_factor)
-        increasing_discounted_gammas = tf.cumprod(constant_gammas, reverse=True)
-        prev_layer = self.rl_inputs
-        with tf.variable_scope("critic"):
-            for i, d in enumerate(critic_net_dim[1:]):
-                prev_layer = tl.fully_connected(prev_layer, d, scope="layer{}".format(i), activation_fn=lrelu)
-            self.critic_value = tf.squeeze(prev_layer, axis=1, name="critic_value")
-        self.return_targets = self.return_targets_not_bootstraped + increasing_discounted_gammas * tf.stop_gradient(self.critic_value[-1])
-        self.critic_losses = (self.critic_value - self.return_targets) ** 2
-        self.critic_loss = tf.reduce_mean(self.critic_losses, name="loss")
+        self.increasing_discounted_gammas = tf.cumprod(constant_gammas, reverse=True)
 
-        self.actions_indices = tf.placeholder(shape=[None, 4], dtype=tf.int32, name="actor_picked_actions")  # picked actions
-        self.actor_targets = self.return_targets - tf.stop_gradient(self.critic_value)
-        targets = tf.expand_dims(self.actor_targets, -1)
-        actor_net_dim = [None, 200, 200, self.n_actions]
-        actors_out = []
-        with tf.variable_scope("actor"):
-            # for every joint:
-            for j in range(4):
-                prev_layer = self.rl_inputs
-                for i, d in enumerate(actor_net_dim[1:]):
-                    prev_layer = tl.fully_connected(prev_layer, d, scope="actor{}_layer{}".format(j, i))
-                actors_out.append(prev_layer)
-            self.logits = tf.stack(actors_out, axis=1) / self.softmax_temperature  # [BS, 4, NA]
-            self.probs = tf.nn.softmax(self.logits, axis=-1)
-            # self.dist = tf.distributions.Categorical(logits=self.logits)
-            self.dist = tf.distributions.Categorical(probs=self.probs)
-            self.log_picked_probs = self.dist.log_prob(self.actions_indices)  # [BS, 4]
-            self.picked_probs = self.dist.prob(self.actions_indices)  # [BS, 4]
-            self.greedy_actions_indices = tf.argmax(self.logits, axis=-1)   # [BS, 4]
-            self.sampled_actions_indices = self.dist.sample()
-
-        self.action_applied_in_env = self.sampled_actions_indices
-        self.entropy = self.dist.entropy()
-        self.entropy_mean = tf.reduce_mean(self.entropy, name="entropy_mean")
-        # self.actor_losses = -tf.maximum(self.log_picked_probs, -4) * targets - self.entropy_coef * self.entropy
-        self.actor_losses = - self.log_picked_probs * targets - self.entropy_coef * self.entropy
-        self.actor_loss = tf.reduce_sum(self.actor_losses, name="loss")
-        # optimizer / summary
+        self.indices_actions_tab = [tf.stack([tf.range(self.batch_size), self.actions_indices_placeholder[:, j]], axis=1) for j in range(4)]
+        self.action_mask = [tf.one_hot(
+              self.actions_indices_placeholder[:, j],
+              self.n_actions,
+              on_value=0.0,
+              off_value=1.0
+        ) for j in range(4)]
+        self.epsilon = tf.Variable(self.epsilon_init)
+        self.epsilon_update = self.epsilon.assign(self.epsilon * self.epsilon_decay)
+        # DEFINE GOAL NETWORKS
+        self.goal_tensors = [None] * self.goal_library_size
+        for goal_index in range(self.goal_library_size):
+            self.define_goal_network(goal_index)
+        # MICELANEOUS
         self.global_step = tf.Variable(0, dtype=tf.int32)
         self.global_step_inc = self.global_step.assign_add(1)
-        self.critic_optimizer = tf.train.AdamOptimizer(self.critic_lr)
-        self.critic_train_op = self.critic_optimizer.minimize(self.critic_loss)
-        self.actor_optimizer = tf.train.AdamOptimizer(self.actor_lr)
-        self.actor_train_op = self.actor_optimizer.minimize(self.actor_loss)
-        # summaries
-        names = ["arm1_arm2_left", "arm1_arm2_right", "ground_arm1_left", "ground_arm1_right"]
-        prob_summaries = []
-        for i, name in zip(range(4), names):
-            prob_summary = tf.summary.scalar("joints/{}_prob".format(name), self.picked_probs[0, i])
-            prob_summaries.append(prob_summary)
-        max_logits_summary = tf.summary.scalar("/rl/max_logits", tf.reduce_max(self.logits))
-        entropy_summary = tf.summary.scalar("/rl/entropy", self.entropy_mean)
-        actor_loss_summary = tf.summary.scalar("/rl/actor_loss", tf.reduce_mean(self.actor_losses))
-        critic_loss_summary = tf.summary.scalar("/rl/critic_loss", self.critic_losses[0])
-        critic_quality = tf.reduce_mean(self.critic_losses / tf.reduce_mean((self.return_targets - tf.reduce_mean(self.return_targets)) ** 2))
-        sum_critic_quality = tf.summary.scalar("/rl/critic_quality", tf.clip_by_value(critic_quality, -20, 20))
-        self.rl_summary = tf.summary.merge([
-            max_logits_summary,
-            entropy_summary,
-            actor_loss_summary,
-            critic_loss_summary,
-            sum_critic_quality] + prob_summaries)
 
     def get_state(self, as_trajectory=False):
         if as_trajectory:
             return self.env.discrete_positions[np.newaxis, :], self.env.discrete_speeds[np.newaxis, :], self.env.tactile[np.newaxis, :]
         return self.env.discrete_positions, self.env.discrete_speeds, self.env.tactile
 
-    def to_feed_dict(self, states=None, goals=None, actions=None, rewards=None):
+    def to_feed_dict(self, states=None, actions=None, rewards=None):
         # transforms the inputs into a feed dict for the actor / critic
         feed_dict = {}
         if states is not None:
             feed_dict[self.inp_discrete_positions], feed_dict[self.inp_discrete_speeds], feed_dict[self.inp_tactile] = \
                 states
-        if goals is not None:
-            feed_dict[self.inp_goals] = goals
         if actions is not None:
-            feed_dict[self.actions_indices] = actions
+            feed_dict[self.actions_indices_placeholder] = actions
         if rewards is not None:
             # reverse pass through the rewards here...
             returns = self.rewards_to_return(rewards)
-            feed_dict[self.return_targets_not_bootstraped] = returns
+            feed_dict[self.returns_not_bootstraped] = returns
         return feed_dict
 
 
@@ -485,7 +500,9 @@ class Experiment:
             f.write("python3 " + " ".join(sys.argv) + "\n")
         self.cluster = get_cluster(n_parameter_servers, n_workers)
         self.args_env, self.args_worker = args_env, list(args_worker)
-        self.args_worker = [self.cluster, self.logdir] + self.args_worker
+        env = environment.Environment(*self.args_env)
+        goal_library = GoalLibrary(100, env.tactile.shape[0], env.vision.shape, 0.99999)
+        self.args_worker = [self.cluster, self.logdir] + self.args_worker + [goal_library]
         self.args_env_display = list(args_env)
         self.args_env_display[5] = display_dpi
         pipes = [multiprocessing.Pipe(True) for i in range(n_workers)]
@@ -535,7 +552,10 @@ class Experiment:
     def worker_func(self, task_index):
         env = environment.Environment(*self.args_env)
         worker = Worker(task_index, self.there_pipes[task_index], env, *self.args_worker)
-        worker.wait_for_variables_initialization()
+        if task_index == 0:
+            worker.initialize()
+        else:
+            worker.wait_for_variables_initialization()
         worker()
 
     def start_tensorboard(self):
@@ -576,33 +596,33 @@ class Experiment:
         while len(self.here_display_pipes) > 0:
             self.set_display_worker_idle()
 
-    def print_goal_warehouse(self):
+    def print_goal_library(self):
+        self.here_worker_pipes[0].send(("print_goal_library", ))
+        self.here_worker_pipes[0].recv()
+
+    # def populate_goal_library(self):
+    #     self.here_worker_pipes[0].send(("populate_goal_library", ))
+    #     self.here_worker_pipes[0].recv()
+    #     self.dump_goal_library()
+    #     self.restore_goal_library(self.goaldumpsdir, all_same=True)
+
+    def take_goal_library_snapshot(self):
+        self.here_worker_pipes[0].send(("take_goal_library_snapshot", ))
+        print(self.here_worker_pipes[0].recv())
+
+    def restore_goal_library(self, path):
         for p in self.here_worker_pipes:
-            p.send(("print_goal_warehouse", ))
+            p.send(("restore_goal_library", path))
         for p in self.here_worker_pipes:
             p.recv()
 
-    def take_goals_warehouse_snapshot(self):
-        for p in self.here_worker_pipes:
-            p.send(("take_goals_warehouse_snapshot", ))
-        for p in self.here_worker_pipes:
-            p.recv()
+    def dump_goal_library(self):
+        self.here_worker_pipes[0].send(("dump_goal_library", self.goaldumpsdir))
+        print(self.here_worker_pipes[0].recv())
 
-    def restore_goals_warehouse(self, path):
+    def randomize_env(self, n=None):
         for p in self.here_worker_pipes:
-            p.send(("restore_goals_warehouse", path))
-        for p in self.here_worker_pipes:
-            p.recv()
-
-    def dump_goals_warehouse(self):
-        for p in self.here_worker_pipes:
-            p.send(("dump_goals_warehouse", self.goaldumpsdir))
-        for p in self.here_worker_pipes:
-            p.recv()
-
-    def randomize_env(self):
-        for p in self.here_worker_pipes:
-            p.send(("randomize_env", ))
+            p.send(("randomize_env", n, True))
         for p in self.here_worker_pipes:
             p.recv()
 
@@ -636,9 +656,6 @@ class Experiment:
     def restore_model(self, path):
         self.here_worker_pipes[0].send(("restore", path))
         print(self.here_worker_pipes[0].recv())
-        # for p in self.here_worker_pipes:
-        #     p.send(("restore", path))
-        #     print(p.recv())
 
     def close_workers(self):
         for p in self.here_worker_pipes:

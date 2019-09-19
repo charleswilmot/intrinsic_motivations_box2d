@@ -25,10 +25,10 @@ with Experiment(1, 8, "../experiments/skin/debug/", args_env, args_worker, displ
     experiment.start_display_worker(training=True)
     for i in range(10000):
         experiment.asynchronously_train(1000, train_actor=(i > 20))
-        experiment.take_goals_warehouse_snapshot()
+        experiment.take_goal_library_snapshot()
         if (i + 1) % 10 == 0:
-            experiment.print_goal_warehouse()
-            experiment.dump_goals_warehouse()
+            experiment.print_goal_library()
+            experiment.dump_goal_library()
         if (i + 1) % 100 == 0:
             experiment.save_model()
         # experiment.randomize_env()
