@@ -259,6 +259,7 @@ class GoalLibrary:
         ax_vision.set_yticks([], [])
         ax_tactile.set_yticks([], [])
         ax_tactile.set_ylim([0, 1])
+        ax_rnp.set_ylim([0, 0.05])
         ax_rp.set_ylabel("r|p")
         ax_rnp.set_ylabel("r|~p")
         ax_drp.set_ylabel("delta r|p")

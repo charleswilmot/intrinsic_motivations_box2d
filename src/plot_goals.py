@@ -1,6 +1,6 @@
 if __name__ == "__main__":
     import argparse
-    import dtgoal2
+    import goal_library
     import pickle
     import os
     import re
