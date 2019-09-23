@@ -19,7 +19,7 @@ import time
 import viewer
 import os
 import filelock
-
+from imageio import get_writer
 
 
 def lrelu(x):
@@ -212,15 +212,15 @@ class Worker:
         self.goal_library.print_with_header("{} goal library:".format(self.name))
         self.pipe.send("{} printed goal library".format(self.name))
 
-    def run_video(self, path, n_sequences, training=True):
-        start_index = 0
-        with TemporaryDirectory() as tmppath:
-            while not os.path.isdir(tmppath):
-                time.sleep(0.1)
-            for i in range(n_sequences):
-                start_index = self.run_n_video_steps(tmppath, start_index, training=training)
-            os.system("ffmpeg -loglevel panic -r 24 -i {}/frame_%06d.png -vcodec mpeg4 -b 100000 -y {}".format(tmppath, path))
-        self.pipe.send("{} saved video under {}".format(self.name, path))
+    # def run_video(self, path, n_sequences, training=True):
+    #     start_index = 0
+    #     with TemporaryDirectory() as tmppath:
+    #         while not os.path.isdir(tmppath):
+    #             time.sleep(0.1)
+    #         for i in range(n_sequences):
+    #             start_index = self.run_n_video_steps(tmppath, start_index, training=training)
+    #         os.system("ffmpeg -loglevel panic -r 24 -i {}/frame_%06d.png -vcodec mpeg4 -b 100000 -y {}".format(tmppath, path))
+    #     self.pipe.send("{} saved video under {}".format(self.name, path))
 
     def take_goal_library_snapshot(self):
         iteration = self.sess.run(self.global_step)
@@ -318,10 +318,6 @@ class Worker:
             # run action in env
             self.env.env_step()
             # get current vision
-            self.goal_library.register_goal(
-                observed_goal=self.env.tactile,
-                pursued_goal=goal,
-                vision=self.env.vision)  # point is to have a snapshot of the contact stored in the library
             vision = self.env.vision
             tactile_true = self.env.tactile
             current_reward = rewards[i]
@@ -334,29 +330,49 @@ class Worker:
         self.goal_library.save_vision(goaldir + "/worker{}/".format(self.task_index))
         self.pipe.send("{} saved vision related to the goals in the goals library".format(self.name))
 
-    def run_n_video_steps(self, path, start_index, training=True):
+    def save_video(self, path, goal_index, n_frames=2000, training=True):
         # goal_index, goal = self.goal_library.select_goal_learning_potential(self.goal_temperature)
-        goal_index, goal = self.goal_library.select_goal_uniform_reachable_only()
+        win = viewer.SkinAgentWindow(self.discount_factor, return_lookback=50, show=False)
+        win.set_return_lim([-0.1, 1 / 0.1 + (1 - self.discount_factor)])
+        width, height = win.fig.canvas.get_width_height()
+        goal_info = self.goal_library.goal_info(goal_index)
+        goal = goal_info["intensities"]
+        reaching_probability = goal_info["r|p"]
         goals = goal[np.newaxis, :]
         if training:
             action_fetches = self.goal_tensors[goal_index]["sampled_actions_indices"]
         else:
             action_fetches = self.goal_tensors[goal_index]["greedy_actions_indices"]
-        for i in range(self.sequence_length):
-            feed_dict = self.to_feed_dict(states=self.get_state(True))
-            actions = self.sess.run(action_fetches, feed_dict=feed_dict)
-            action = actions[0]
-            # set positions in env
-            action_dict = self.actions_dict_from_indices(action)
-            self.env.set_positions(action_dict)
-            # run action in env
-            self.env.env_step()
-            # get current vision
-            vision = self.env.vision
-            # save
-            data = vision.reshape(vision.shape[0], -1)
-            png.from_array(data, "RGB").save(path + "/frame_{:06d}.png".format(start_index + i))
-        return start_index + i + 1
+        critic_fetches = self.goal_tensors[goal_index]["critic_out"]
+        fetches = [action_fetches, critic_fetches]
+        # writer = FFMpegWriter(fps=24, bitrate=-1)
+        # with writer.saving(win.fig, path + "/{:4d}.mp4".format(goal_index), 100):
+        with get_writer(path + "/{:04d}.mp4".format(goal_index), fps=25, format="mp4") as writer:
+            for i in range(n_frames):
+                feed_dict = self.to_feed_dict(states=self.get_state(True))
+                actions, predicted_returns = self.sess.run(fetches, feed_dict=feed_dict)
+                action = actions[0]
+                # set positions in env
+                action_dict = self.actions_dict_from_indices(action)
+                self.env.set_positions(action_dict)
+                # run action in env
+                self.env.env_step()
+                # get current vision
+                vision = self.env.vision
+                tactile_true = self.env.tactile
+                current_reward = discretization.np_discretization_reward(tactile_true, goal)
+                predicted_return = np.max(predicted_returns)
+                # display
+                win(vision, tactile_true, goal, current_reward, predicted_return, reaching_probability=reaching_probability)
+                ############
+                # methode 1: ( https://matplotlib.org/3.1.1/gallery/animation/frame_grabbing_sgskip.html )
+                # writer.grab_frame()
+                ############
+                # methode 2: ( http://www.icare.univ-lille1.fr/tutorials/convert_a_matplotlib_figure )
+                frame = np.fromstring(win.fig.canvas.tostring_argb(), dtype=np.uint8).reshape(height, width, 4)
+                frame = frame[:, :, 1:]               # if we discard the alpha chanel
+                writer.append_data(frame)
+        self.pipe.send("{} saved video under {}".format(self.name, path))
 
     def rewards_to_return(self, rewards, prev_return=0):
         returns = np.zeros_like(rewards)
@@ -501,7 +517,8 @@ class Experiment:
         self.cluster = get_cluster(n_parameter_servers, n_workers)
         self.args_env, self.args_worker = args_env, list(args_worker)
         env = environment.Environment(*self.args_env)
-        goal_library = GoalLibrary(100, env.tactile.shape[0], env.vision.shape, 0.99999)
+        self.library_size = 100
+        goal_library = GoalLibrary(self.library_size, env.tactile.shape[0], env.vision.shape, 0.99999)
         self.args_worker = [self.cluster, self.logdir] + self.args_worker + [goal_library]
         self.args_env_display = list(args_env)
         self.args_env_display[5] = display_dpi
@@ -642,10 +659,14 @@ class Experiment:
         self.here_worker_pipes[0].send(("save", self.checkpointsdir))
         print(self.here_worker_pipes[0].recv())
 
-    def save_video(self, name, n_sequences, training=True):
-        path = self.videodir + "/{}.mp4".format(name)
-        self.here_worker_pipes[0].send(("run_video", path, n_sequences, training))
-        print(self.here_worker_pipes[0].recv())
+    def save_video(self, name, path=None, n_frames=2000, training=False):
+        path = self.videodir + "/" + name + "/" if path is None else path + "/" + name + "/"
+        os.mkdir(path)
+        n_workers = len(self.here_worker_pipes)
+        for i in range(self.library_size):
+            self.here_worker_pipes[i % n_workers].send(("save_video", path, i, n_frames, training))
+        for i in range(self.library_size):
+            print(self.here_worker_pipes[i % n_workers].recv())
 
     def save_contact_logs(self, name):
         for p in self.here_worker_pipes:

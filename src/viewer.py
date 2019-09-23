@@ -4,7 +4,7 @@ import time
 import tensorflow as tf
 
 
-plt.ion()
+#plt.ion()
 
 
 class Viewer:
@@ -517,7 +517,7 @@ class JointAgentWindow:
 
 
 class SkinAgentWindow:
-    def __init__(self, discount_factor, return_lookback=100):
+    def __init__(self, discount_factor, return_lookback=100, show=True):
         self.fig = plt.figure()
         self.iax_vision = VisionIAX(self.fig.add_subplot(221))
         self.iax_return = OnlineReturnIAX(self.fig.add_subplot(222), discount_factor, return_lookback)
@@ -525,7 +525,7 @@ class SkinAgentWindow:
         self.iax_tactile_target = TactileIAX(self.fig.add_subplot(224))
         self.annotation = self.fig.text(0.1, 0.05, "")
         self.probability = self.fig.text(0.5, 0.05, "")
-        self._fig_shawn = False
+        self._fig_shawn = False if show else True
 
     def close(self):
         plt.close(self.fig)

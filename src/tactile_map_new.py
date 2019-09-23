@@ -94,6 +94,63 @@ class TactileSensor:
         return s.stop - s.start
 
 
+class TactileSensor:
+    def __init__(self, body, edge_ids):
+        self.body = body
+        self.edge_ids = edge_ids
+        vertices = np.array(body.fixtures[0].shape.vertices)
+        self.edges = np.array(list(zip(vertices, vertices[list(range(1, len(vertices))) + [0]])))
+        # self.edges_norm = np.array([norm(e[1] - e[0]) for e in self.edges])
+        # self._map = np.zeros(n_touch_cells)
+        # self._map_updated = True
+        # self._cumulative_perimeter = np.cumsum(edges_length(self.edges))
+        # self.body_perimeter = self._cumulative_perimeter[-1]
+        # self.step = self.body_perimeter / self.n_touch_cells
+        # index_edge_end = [int(np.floor(a / self.step)) for a in self._cumulative_perimeter]
+        # self._edges_to_slice = [slice(a + 1, b + 1) for a, b in zip([-1] + index_edge_end, index_edge_end)]
+
+    def _assign_float(self, findex, value):
+        index = np.floor(findex)
+        if index == findex:
+            index = int(index) % self.n_touch_cells
+            self._map[index] += value
+        else:
+            ratio = findex - index
+            index = int(index)
+            index_next = (index + 1) % self.n_touch_cells
+            self._map[index] += value * (1 - ratio)
+            self._map[index_next] += value * ratio
+
+    def _get_perimeter(self, proj):
+        n = self.edges_norm[proj[0]]
+        return self._cumulative_perimeter[proj[0] - 1] + proj[1] * n if proj[0] > 0 else proj[1] * n
+
+    def compute_map(self):
+        self._map[:] = 0
+        for point in self._points:
+            proj = project_on_edges(self.edges, point)
+            perim = self._get_perimeter(proj)
+            self._assign_float(perim / self.step, 1)
+        return self._map
+
+    def _get_contact_points(self):
+        contacts_world = [ce.contact.worldManifold.points[0]
+                          for ce in self.body.contacts if ce.contact.touching]
+        contacts_local = [self.body.GetLocalPoint(x)
+                          for x in contacts_world]
+        return contacts_local
+
+    _points = property(_get_contact_points)
+
+    def compute_edge_map(self, edge_indices):
+        tactile_map = self.compute_map()
+        return [tactile_map[self._edges_to_slice[edge_index]] for edge_index in edge_indices]
+
+    def edge_map_length(self, edge_index):
+        s = self._edges_to_slice[edge_index]
+        return s.stop - s.start
+
+
 class Skin:
     def __init__(self, bodies, order, resolution):
         used_bodies = {k: bodies[k] for k in bodies if k in [a for a, b in order]}
