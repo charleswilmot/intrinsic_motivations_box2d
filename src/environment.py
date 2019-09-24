@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 import jsonpybox2d as json2d
 import numpy as np
-import tactile_map_new as tm
+import tactile_map as tm
 import pid
 from PIL import Image, ImageDraw
 import pickle
