@@ -128,7 +128,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '-env', '--environment-path',
         type=str,
-        default="../environments/two_arms_45_max_torque_1000_ndiscrete_128_medium_weight_balls_dpi_10_low_res.pkl",
+        default="../environments/two_arms_45_max_torque_1000_ndiscrete_128_medium_weight_balls_dpi_10_skin_res_20.pkl",
         help="Path to an environment pickle file."
     )
     parser.add_argument(
@@ -198,4 +198,3 @@ if __name__ == "__main__":
         experiment.print_goal_library()
         experiment.dump_goal_library()
         experiment.save_model()
-        
