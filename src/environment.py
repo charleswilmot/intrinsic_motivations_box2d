@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 import jsonpybox2d as json2d
 import numpy as np
-import tactile_map as tm
+import tactile_map_new as tm
 import pid
 from PIL import Image, ImageDraw
 import pickle
@@ -360,10 +360,11 @@ if __name__ == "__main__":
         ("Arm2_Right", 1),
         ("Arm2_Right", 2),
         ("Arm1_Right", 2)]
-    skin_resolution = 12
+    skin_resolution = 15
     xlim = [-20.5, 20.5]
     ylim = [-13.5, 13.5]
-    env = Environment("../models/two_arms.json", skin_order, skin_resolution, xlim, ylim, dpi=10, dt=1 / 150.0)
+    env_step_length = 45
+    env = Environment("../models/two_arms.json", skin_order, skin_resolution, xlim, ylim, 10, env_step_length, dt=1 / 150.0)
 
     for i in range(1000):
         actions = {
@@ -373,8 +374,8 @@ if __name__ == "__main__":
             "Ground_to_Arm1_Right": np.random.uniform(-3.14, 3.14)
         }
         env.set_positions(actions)
-        for j in range(1000):
-            if j % 100 == 0:
+        for i in range(1000):
+            if i % 1000 == 0:
                 win.update(*env.state)
             env.step()
         # for key in env.joint_pids:
