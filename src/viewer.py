@@ -4,7 +4,7 @@ import time
 import tensorflow as tf
 
 
-plt.ion()
+#plt.ion()
 
 
 class Viewer:
