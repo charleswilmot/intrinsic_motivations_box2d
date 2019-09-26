@@ -345,9 +345,7 @@ class Worker:
             action_fetches = self.goal_tensors[goal_index]["greedy_actions_indices"]
         critic_fetches = self.goal_tensors[goal_index]["critic_out"]
         fetches = [action_fetches, critic_fetches]
-        # writer = FFMpegWriter(fps=24, bitrate=-1)
-        # with writer.saving(win.fig, path + "/{:4d}.mp4".format(goal_index), 100):
-        with get_writer(path + "/{:04d}.mp4".format(goal_index), fps=25, format="mp4") as writer:
+        with get_writer(path + "/{:04d}.avi".format(goal_index), fps=25, format="avi", quality=5) as writer:
             for i in range(n_frames):
                 feed_dict = self.to_feed_dict(states=self.get_state(True))
                 actions, predicted_returns = self.sess.run(fetches, feed_dict=feed_dict)
