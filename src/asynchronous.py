@@ -97,14 +97,15 @@ class Worker:
         self.replay_buffer_size = replay_buffer_size
         self.updates_per_episode = updates_per_episode
         self.HER_strategy = HER_strategy
-        self.n_actions = 30
+        self.n_actions = 10
         self.dtgoal = np.dtype(
             [("intensities", np.float32, 5),
              ("all", np.float32),
              ("pursued", np.float32),
              ("not_pursued", np.float32)])
         self.actions_ground_to_arm = np.linspace(-3.14, 3.14, self.n_actions)
-        self.actions_arm_to_arm = np.linspace(-2.7, 2.7, self.n_actions)
+        # self.actions_arm_to_arm = np.linspace(-2.7, 2.7, self.n_actions)
+        self.actions_arm_to_arm = np.linspace(-3.14, 3.14, self.n_actions)
         self.pipe = pipe
         self.replay_buffer = Buffer(self.replay_buffer_size)
         p, s, t = self.get_state()
@@ -250,7 +251,8 @@ class Worker:
         while(self.goal_library._n_goals < self.goal_library_size):
             before = self.goal_library._n_goals
             action = np.random.randint(0, self.n_actions, 4)
-            self.env.set_positions(self.actions_dict_from_indices(action))
+            # self.env.set_positions(self.actions_dict_from_indices(action))
+            self.env.set_speeds(self.actions_dict_from_indices(action))
             self.env.env_step()
             self.goal_library.register_goal(
                 observed_goal=self.env.tactile,
@@ -275,7 +277,8 @@ class Worker:
             action = self.get_action(goal_index)
             actions[iteration] = action
             # set action
-            self.env.set_positions(self.actions_dict_from_indices(action))
+            # self.env.set_positions(self.actions_dict_from_indices(action))
+            self.env.set_speeds(self.actions_dict_from_indices(action))
             # get states
             state_positions[iteration], state_speeds[iteration], state_tactile[iteration] = self.get_state()
             reward = self.goal_library.register_goal(
@@ -292,7 +295,8 @@ class Worker:
         n = 5 if n is None else n
         for i in range(n):
             action = np.random.randint(0, self.n_actions, 4)
-            self.env.set_positions(self.actions_dict_from_indices(action))
+            # self.env.set_positions(self.actions_dict_from_indices(action))
+            self.env.set_speeds(self.actions_dict_from_indices(action))
             self.env.env_step()
         if _answer:
             self.pipe.send("{} applied {} random actions".format(self.name, n))
@@ -314,7 +318,8 @@ class Worker:
             action = actions[0]
             rewards[i] = discretization.np_discretization_reward(self.env.tactile, goal)
             # set positions in env
-            self.env.set_positions(self.actions_dict_from_indices(action))
+            # self.env.set_positions(self.actions_dict_from_indices(action))
+            self.env.set_speeds(self.actions_dict_from_indices(action))
             # run action in env
             self.env.env_step()
             # get current vision
@@ -352,7 +357,8 @@ class Worker:
                 action = actions[0]
                 # set positions in env
                 action_dict = self.actions_dict_from_indices(action)
-                self.env.set_positions(action_dict)
+                # self.env.set_positions(action_dict)
+                self.env.set_speeds(action_dict)
                 # run action in env
                 self.env.env_step()
                 # get current vision
