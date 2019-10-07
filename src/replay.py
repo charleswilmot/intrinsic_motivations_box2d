@@ -19,14 +19,11 @@ if __name__ == "__main__":
     checkpoint_path = args.path
     experiment_path = checkpoint_path + "/../../"
 
-    with open(experiment_path + "conf/env_conf.pkl", "rb") as f:
-        args_env = pickle.load(f)
-
-    with open(experiment_path + "conf/worker_conf.pkl", "rb") as f:
-        args_worker = pickle.load(f)
+    with open(experiment_path + "/conf/conf.pkl", "rb") as f:
+        conf = pickle.load(f)
 
     with TemporaryDirectory() as tmppath:
-        with Experiment(1, 1, tmppath + "/replay", args_env, args_worker, display_dpi=3) as experiment:
+        with Experiment(1, 1, tmppath + "/replay", conf, display_dpi=3) as experiment:
             experiment.restore_model(checkpoint_path)
             experiment.restore_goal_library(experiment_path + "goals/dumps/worker_0.pkl")
             experiment.start_display_worker(training=False)
