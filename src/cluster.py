@@ -32,7 +32,6 @@ class ClusterQueue:
         print("\n" * 2, self.cmd_slurm)
         print(self.cmd_python, "\n" * 2)
         os.system(self.cmd)
-        time.sleep(10)
 
     def _key_to_flag(self, key):
         return "--" + key.replace("_", "-")
