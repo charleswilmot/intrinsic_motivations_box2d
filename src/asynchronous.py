@@ -7,7 +7,6 @@ import png
 import environment
 from replay_buffer import Buffer
 from goal_library import GoalLibrary
-import discretization
 import socket
 import multiprocessing
 import subprocess
@@ -315,7 +314,7 @@ class Worker:
             feed_dict = self.to_feed_dict(states=self.get_state(True))
             actions, predicted_returns = self.sess.run(fetches, feed_dict=feed_dict)
             action = actions[0]
-            rewards[i] = discretization.np_discretization_reward(self.env.tactile, goal)
+            rewards[i] = np_discretization_reward(self.env.tactile, goal)
             # set positions in env
             # self.env.set_positions(self.actions_dict_from_indices(action))
             self.env.set_speeds(self.actions_dict_from_indices(action))
@@ -337,7 +336,7 @@ class Worker:
     def save_video(self, path, goal_index, n_frames=2000, training=True):
         # goal_index, goal = self.goal_library.select_goal_learning_potential(self.goal_temperature)
         win = viewer.SkinAgentWindow(self.discount_factor, return_lookback=50, show=False)
-        win.set_return_lim([-0.1, 1 / 0.1 + (1 - self.discount_factor)])
+        win.set_return_lim([-0.1, 1 / (1 - self.discount_factor) + 0.1])
         width, height = win.fig.canvas.get_width_height()
         goal_info = self.goal_library.goal_info(goal_index)
         goal = goal_info["intensities"]
@@ -363,7 +362,7 @@ class Worker:
                 # get current vision
                 vision = self.env.vision
                 tactile_true = self.env.tactile
-                current_reward = discretization.np_discretization_reward(tactile_true, goal)
+                current_reward = np_discretization_reward(tactile_true, goal)
                 predicted_return = np.max(predicted_returns)
                 # display
                 win(vision, tactile_true, goal, current_reward, predicted_return, reaching_probability=reaching_probability)
@@ -416,7 +415,7 @@ class Worker:
             start = tf.reduce_max(out_layer[-1])
             returns = self.returns_not_bootstraped + self.increasing_discounted_gammas * tf.stop_gradient(start)
             critic_values_picked_actions = tf.gather_nd(out_layer, self.indices_actions_tab[j])
-            losses = (critic_values_picked_actions - returns) ** 2
+            losses = (critic_values_picked_actions - returns) ** 2 * (1 - self.discount_factor)
             mask = self.action_mask[j]
             stay_the_same_loss = mask * (out_layer - tf.stop_gradient(out_layer)) ** 2
             loss = (tf.reduce_sum(losses) + tf.reduce_sum(stay_the_same_loss)) / self.n_actions
