@@ -52,7 +52,9 @@ class Environment(object):
         self.to_name = {self.bodies[name]: name for name in self.bodies}
         self.contact_logs = {}
         self.joints = joints
-        self.used_bodies = {k: bodies[k] for k in bodies if k in [a for a, b in skin_order]}
+        with open(skin_order, "rb") as f:
+            self.skin_order = pickle.load(f)
+        self.used_bodies = {k: bodies[k] for k in bodies if k in [a for a, b in self.skin_order]}
         self.joint_pids = {key: pid.PID(dt=self.dt)
                            for key in self.joints}
         self._joint_keys = [key for key in sorted(self.joints)]
@@ -60,9 +62,9 @@ class Environment(object):
         self._buf_positions = np.zeros(len(self.joints))
         self._buf_target_positions = np.zeros(len(self.joints))
         self._buf_speeds = np.zeros(len(self.joints))
-        self.skin = tm.Skin(self.bodies, skin_order, skin_resolution)
+        self.skin = tm.Skin(self.bodies, self.skin_order, skin_resolution)
         self._joints_in_position_mode = set()
-        tactile_bodies_names = set([body_name for body_name, edge in skin_order])
+        tactile_bodies_names = set([body_name for body_name, edge in self.skin_order])
         self.renderer = Renderer(self.bodies, xlim, ylim, tactile_bodies_names=tactile_bodies_names, dpi=dpi)
         self._computed_vision = False
         self._computed_tactile = False
@@ -72,6 +74,18 @@ class Environment(object):
         self._computed_discrete_speeds = False
         self._computed_target_positions = False
         self._computed_discrete_target_positions = False
+
+    @staticmethod
+    def from_conf(conf):
+        return Environment(conf.json_model,
+                           conf.skin_order,
+                           conf.skin_resolution,
+                           conf.xlim,
+                           conf.ylim,
+                           conf.dpi,
+                           conf.env_step_length,
+                           conf.dt,
+                           conf.n_discrete)
 
     def log_contacts(self):
         contacts = {body:

@@ -74,9 +74,7 @@ def get_available_port(start_port=6006):
 
 
 class Worker:
-    def __init__(self, task_index, pipe, env, cluster, logdir, discount_factor, sequence_length,
-                 critic_lr, actor_lr, entropy_coef, softmax_temperature, replay_buffer_size, updates_per_episode,
-                 HER_strategy, goal_library):
+    def __init__(self, task_index, pipe, env, cluster, logdir, goal_library, conf):
         self.task_index = task_index
         self.cluster = cluster
         self._n_workers = self.cluster.num_tasks("worker") - 1
@@ -86,25 +84,19 @@ class Worker:
         self.device = tf.train.replica_device_setter(worker_device=self.name, cluster=cluster)
         self.env = env
         self.logdir = logdir
-        self.discount_factor = discount_factor
-        self.sequence_length = sequence_length
-        self.critic_lr = critic_lr
-        self.actor_lr = actor_lr
-        self.entropy_coef = entropy_coef
-        self.epsilon_init = 0.05
-        self.epsilon_decay = 1
-        self.softmax_temperature = softmax_temperature
-        self.replay_buffer_size = replay_buffer_size
-        self.updates_per_episode = updates_per_episode
-        self.HER_strategy = HER_strategy
-        self.n_actions = 10
-        self.dtgoal = np.dtype(
-            [("intensities", np.float32, 5),
-             ("all", np.float32),
-             ("pursued", np.float32),
-             ("not_pursued", np.float32)])
+        self.conf = conf
+        self.discount_factor = self.conf.worker_conf.discount_factor
+        self.sequence_length = self.conf.worker_conf.sequence_length
+        self.critic_lr = self.conf.worker_conf.critic_learning_rate
+        self.epsilon_init = self.conf.worker_conf.epsilon_init
+        self.epsilon_decay = self.conf.worker_conf.epsilon_decay
+        self.softmax_temperature = self.conf.goal_library_conf.softmax_temperature
+        self.min_reaching_prob = self.conf.goal_library_conf.min_reaching_prob
+        self.replay_buffer_size = self.conf.worker_conf.buffer_size
+        self.updates_per_episode = self.conf.worker_conf.updates_per_episode
+        self.her_strategy = self.conf.worker_conf.her_strategy
+        self.n_actions = self.conf.worker_conf.n_actions
         self.actions_ground_to_arm = np.linspace(-3.14, 3.14, self.n_actions)
-        # self.actions_arm_to_arm = np.linspace(-2.7, 2.7, self.n_actions)
         self.actions_arm_to_arm = np.linspace(-3.14, 3.14, self.n_actions)
         self.pipe = pipe
         self.replay_buffer = Buffer(self.replay_buffer_size)
@@ -141,11 +133,18 @@ class Worker:
             time.sleep(1)
 
     def __call__(self):
+        self.pipe.send("{} going idle".format(self.name))
         cmd = self.pipe.recv()
         while not cmd == "done":
-            print("{} got command {}".format(self.name, cmd))
-            self.__getattribute__(cmd[0])(*cmd[1:])
-            cmd = self.pipe.recv()
+            try:
+                print("{} got command {}".format(self.name, cmd))
+                self.__getattribute__(cmd[0])(*cmd[1:])
+                cmd = self.pipe.recv()
+            except KeyboardInterrupt as e:
+                print("{} caught a keyboard interrupt".format(self.name))
+            except Exception as e:
+                print("{} caught exception in worker:".format(self.name))
+                raise e
 
     def save(self, path):
         iteration = self.sess.run(self.global_step)
@@ -166,9 +165,9 @@ class Worker:
             # returns a trajectory return (state_positions, state_speeds, state_tactile), goals, actions, rewards
             states, goals, goal_index, actions, rewards = self.run_n_steps()
             # Place in buffer
-            if self.HER_strategy.lower() == "none":
+            if self.her_strategy.lower() == "none":
                 self.replay_buffer.incorporate((states, goals, index, actions, rewards))
-            elif self.HER_strategy.lower() == "first_contact":
+            elif self.her_strategy.lower() == "first_contact":
                 for tactile in states[2]:
                     if np.sum(tactile) > 0:
                         faked_index = self.goal_library.index_of(tactile)
@@ -176,7 +175,7 @@ class Worker:
                         faked_rewards = np_discretization_reward(states[2], faked_goals)
                         self.replay_buffer.incorporate((states, faked_goals, faked_index, actions, faked_rewards))
                         break
-            elif self.HER_strategy.lower() == "all_contacts":
+            elif self.her_strategy.lower() == "all_contacts":
                 index_done = set()
                 for tactile in states[2]:
                     if np.sum(tactile) > 0:
@@ -186,7 +185,7 @@ class Worker:
                             faked_goals = np.repeat(tactile[np.newaxis, :], self.sequence_length, 0)
                             faked_rewards = np_discretization_reward(states[2], faked_goals)
                             self.replay_buffer.incorporate((states, faked_goals, faked_index, actions, faked_rewards))
-            elif self.HER_strategy.lower() == "something_else":
+            elif self.her_strategy.lower() == "something_else":
                 raise NotImplementedError("not implemented")
             # Update the global networks
             trajectories = self.replay_buffer.batch(self.updates_per_episode)
@@ -267,8 +266,8 @@ class Worker:
         state_positions = np.zeros((self.sequence_length, ) + self._p_size)
         state_speeds = np.zeros((self.sequence_length, ) + self._s_size)
         state_tactile = np.zeros((self.sequence_length, ) + self._t_size)
-        # goal_index, goal = self.goal_library.select_goal_learning_potential(self.goal_temperature)
-        goal_index, goal = self.goal_library.select_goal_uniform_reachable_only()
+        # goal_index, goal = self.goal_library.select_goal_learning_potential(self.softmax_temperature)
+        goal_index, goal = self.goal_library.select_goal_uniform_reachable_only(min_prob=self.min_reaching_prob)
         goals = np.repeat(goal[np.newaxis, :], self.sequence_length, 0)
         actions = np.zeros((self.sequence_length, 4))
         rewards = np.zeros((self.sequence_length, ))
@@ -504,28 +503,28 @@ class Worker:
 
 
 class Experiment:
-    def __init__(self, n_parameter_servers, n_workers, experiment_dir, args_env, args_worker, display_dpi=3):
+    def __init__(self, n_parameter_servers, n_workers, experiment_dir, conf, display_dpi=3):
         lock = filelock.FileLock("/home/wilmot/Documents/code/intrinsic_motivations_box2d/experiments/lock")
         lock.acquire()
         self.n_parameter_servers = n_parameter_servers
         self.n_workers = n_workers
         self.experiment_dir = experiment_dir
+        self.conf = conf
         self.mktree()
         # store infos related to the experiment
-        with open(self.confdir + "/worker_conf.pkl", "wb") as f:
-            pickle.dump(args_worker, f)
-        with open(self.confdir + "/env_conf.pkl", "wb") as f:
-            pickle.dump(args_env, f)
+        with open(self.confdir + "/conf.txt", "w") as f:
+            conf.dump(f)
+        with open(self.confdir + "/conf.pkl", "wb") as f:
+            pickle.dump(conf, f)
         with open(self.confdir + "/command_line.txt", "w") as f:
             f.write("python3 " + " ".join(sys.argv) + "\n")
         self.cluster = get_cluster(n_parameter_servers, n_workers)
-        self.args_env, self.args_worker = args_env, list(args_worker)
-        env = environment.Environment(*self.args_env)
-        self.library_size = 100
-        goal_library = GoalLibrary(self.library_size, env.tactile.shape[0], env.vision.shape, 0.99999)
-        self.args_worker = [self.cluster, self.logdir] + self.args_worker + [goal_library]
-        self.args_env_display = list(args_env)
-        self.args_env_display[5] = display_dpi
+        env = environment.Environment.from_conf(self.conf.environment_conf)
+        goal_size = env.tactile.shape[0]
+        vision_shape = env.vision.shape
+        self.library_size = self.conf.goal_library_conf.goal_library_size
+        ema_speed = self.conf.goal_library_conf.ema_speed
+        self.goal_library = GoalLibrary(self.library_size, goal_size, vision_shape, ema_speed)
         pipes = [multiprocessing.Pipe(True) for i in range(n_workers)]
         self.here_pipes = [a for a, b in pipes]
         self.there_pipes = [b for a, b in pipes]
@@ -548,8 +547,25 @@ class Experiment:
         all_processes = self.parameter_servers_processes + self.workers_processes
         for p in all_processes:
             p.start()
-        time.sleep(5)
+        print("EXPERIMENT: all processes started. Waiting for answer...")
+        for p in self.here_pipes:
+            print(p.recv())
         lock.release()
+        alive = True
+        while alive:
+            time.sleep(10)
+            alive = False
+            for p in self.workers_processes:
+                is_this_worker_alive = p.is_alive()
+                if not is_this_worker_alive:
+                    print("EXPERIMENT: a worker died ;(")
+                alive |= is_this_worker_alive
+        print("EXPERIMENT: all workers terminated, joining")
+        [p.join() for p in self.workers_processes]
+        print("EXPERIMENT: terminating parameter servers and exiting...")
+        [p.terminate() for p in self.parameter_servers_processes]
+        [p.join() for p in self.parameter_servers_processes]
+        print("EXPERIMENT: goodbye")
 
     def mktree(self):
         self.logdir = self.experiment_dir + "/log"
@@ -558,21 +574,21 @@ class Experiment:
         self.videodir = self.experiment_dir + "/video"
         self.goaldir = self.experiment_dir + "/goals"
         self.goaldumpsdir = self.goaldir + "/dumps"
-        os.mkdir(self.experiment_dir)
-        os.mkdir(self.logdir)
-        os.mkdir(self.confdir)
-        os.mkdir(self.videodir)
-        os.mkdir(self.checkpointsdir)
-        os.mkdir(self.goaldir)
-        os.mkdir(self.goaldumpsdir)
+        os.makedirs(self.experiment_dir, exist_ok=True)
+        os.makedirs(self.logdir, exist_ok=True)
+        os.makedirs(self.confdir, exist_ok=True)
+        os.makedirs(self.videodir, exist_ok=True)
+        os.makedirs(self.checkpointsdir, exist_ok=True)
+        os.makedirs(self.goaldir, exist_ok=True)
+        os.makedirs(self.goaldumpsdir, exist_ok=True)
 
     def parameter_server_func(self, task_index):
         server = tf.train.Server(self.cluster, "ps", task_index)
         server.join()
 
     def worker_func(self, task_index):
-        env = environment.Environment(*self.args_env)
-        worker = Worker(task_index, self.there_pipes[task_index], env, *self.args_worker)
+        env = environment.Environment.from_conf(self.conf.environment_conf)
+        worker = Worker(task_index, self.there_pipes[task_index], env, self.cluster, self.logdir, self.goal_library, self.conf)
         if task_index == 0:
             worker.initialize()
         else:
