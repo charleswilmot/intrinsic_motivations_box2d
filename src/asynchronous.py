@@ -503,8 +503,6 @@ class Worker:
 
 class Experiment:
     def __init__(self, n_parameter_servers, n_workers, experiment_dir, conf, display_dpi=3):
-        lock = filelock.FileLock("/home/wilmot/Documents/code/intrinsic_motivations_box2d/experiments/lock")
-        lock.acquire()
         self.n_parameter_servers = n_parameter_servers
         self.n_workers = n_workers
         self.experiment_dir = experiment_dir
@@ -549,7 +547,6 @@ class Experiment:
         print("EXPERIMENT: all processes started. Waiting for answer...")
         for p in self.here_pipes:
             print(p.recv())
-        lock.release()
 
     def mktree(self):
         self.logdir = self.experiment_dir + "/log"

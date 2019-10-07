@@ -42,7 +42,7 @@ if __name__ == "__main__":
         '-nw', '--n-workers',
         type=int,
         help="Number of workers.",
-        default=6
+        default=5
     )
     parser.add_argument(
         '-d', '--description',

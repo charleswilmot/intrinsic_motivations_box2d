@@ -4,7 +4,7 @@ from training import make_experiment_path
 import os
 
 
-MEM_PER_WORKER = 10000
+MEM_PER_WORKER = 12200
 
 class ClusterQueue:
     def __init__(self, **kwargs):
@@ -18,7 +18,7 @@ class ClusterQueue:
         self.cmd_slurm = "sbatch --output {}/log/%N_%j.log".format(self.experiment_path)
         if "description" in kwargs:
             self.cmd_slurm += " --job-name {}".format(kwargs["description"])
-        n_workers = kwargs["n_workers"] if "n_workers" in kwargs else 6
+        n_workers = kwargs["n_workers"] if "n_workers" in kwargs else 5
         self.cmd_slurm += " --mincpus {}".format(n_workers)
         self.cmd_slurm += " --mem {}".format(n_workers * MEM_PER_WORKER)
         self.cmd_slurm += " cluster.sh"
@@ -30,8 +30,9 @@ class ClusterQueue:
         self.cmd_python += self._to_arg("--experiment-path", self.experiment_path)
         self.cmd = self.cmd_slurm + self.cmd_python
         print("\n" * 2, self.cmd_slurm)
-        print("\n", self.cmd_python, "\n" * 2)
+        print(self.cmd_python, "\n" * 2)
         os.system(self.cmd)
+        time.sleep(10)
 
     def _key_to_flag(self, key):
         return "--" + key.replace("_", "-")
@@ -43,6 +44,7 @@ class ClusterQueue:
         os.system("watch tail -n 40 \"{}\"".format(self.experiment_path + "/log/*.log"))
 
 
-cq = ClusterQueue(n_trajectories=1000, flush_every=100, n_workers=2, description="test_cluster",
-                  critic_learning_rate=1e-4, discount_factor=0.99, sequence_length=3, goal_library_size=5)
-cq.watch_tail()
+cq = ClusterQueue(description="reproduce_after_changes")
+cq = ClusterQueue(description="reproduce_after_changes", discount_factor=0.5)
+cq = ClusterQueue(description="reproduce_after_changes", discount_factor=0.95)
+cq = ClusterQueue(description="reproduce_after_changes", discount_factor=0.99)
