@@ -31,4 +31,4 @@ if __name__ == "__main__":
         with Experiment(1, n_workers, tmppath + "/replay", args_env, args_worker, display_dpi=3) as experiment:
             experiment.restore_model(checkpoint_path)
             experiment.restore_goal_library(experiment_path + "/goals/dumps/worker_0.pkl")
-            experiment.save_video("final_video_quality_8_avi", path=experiment_path + "/video", n_frames=1000)
+            experiment.save_video("final_video", path=experiment_path + "/video", n_frames=1000)
