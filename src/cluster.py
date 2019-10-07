@@ -43,6 +43,6 @@ class ClusterQueue:
         os.system("watch tail -n 40 \"{}\"".format(self.experiment_path + "/log/*.log"))
 
 
-cq = ClusterQueue(n_trajectories=10000, flush_every=5000, n_workers=6, description="test_cluster",
-                  critic_learning_rate=1e-4, discount_factor=0.99, sequence_length=3)
+cq = ClusterQueue(n_trajectories=1000, flush_every=100, n_workers=2, description="test_cluster",
+                  critic_learning_rate=1e-4, discount_factor=0.99, sequence_length=3, goal_library_size=5)
 cq.watch_tail()

@@ -5,4 +5,4 @@
 ##SBATCH --reservation triesch-shared
 ##SBATCH --exclude springtalk
 
-srun python3 training.py "$@"
+srun -u python3 training.py "$@"

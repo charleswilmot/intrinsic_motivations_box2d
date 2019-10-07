@@ -74,7 +74,7 @@ def get_available_port(start_port=6006):
 
 
 class Worker:
-    def __init__(self, task_index, pipe, env, cluster, logdir, goal_library, conf):
+    def __init__(self, task_index, pipe, cluster, logdir, goal_library, conf):
         self.task_index = task_index
         self.cluster = cluster
         self._n_workers = self.cluster.num_tasks("worker") - 1
@@ -82,9 +82,9 @@ class Worker:
         self.server = tf.train.Server(cluster, self.job_name, task_index)
         self.name = "/job:{}/task:{}".format(self.job_name, task_index)
         self.device = tf.train.replica_device_setter(worker_device=self.name, cluster=cluster)
-        self.env = env
         self.logdir = logdir
         self.conf = conf
+        self.env = environment.Environment.from_conf(self.conf.environment_conf)
         self.discount_factor = self.conf.worker_conf.discount_factor
         self.sequence_length = self.conf.worker_conf.sequence_length
         self.critic_lr = self.conf.worker_conf.critic_learning_rate
@@ -551,21 +551,6 @@ class Experiment:
         for p in self.here_pipes:
             print(p.recv())
         lock.release()
-        alive = True
-        while alive:
-            time.sleep(10)
-            alive = False
-            for p in self.workers_processes:
-                is_this_worker_alive = p.is_alive()
-                if not is_this_worker_alive:
-                    print("EXPERIMENT: a worker died ;(")
-                alive |= is_this_worker_alive
-        print("EXPERIMENT: all workers terminated, joining")
-        [p.join() for p in self.workers_processes]
-        print("EXPERIMENT: terminating parameter servers and exiting...")
-        [p.terminate() for p in self.parameter_servers_processes]
-        [p.join() for p in self.parameter_servers_processes]
-        print("EXPERIMENT: goodbye")
 
     def mktree(self):
         self.logdir = self.experiment_dir + "/log"
@@ -587,8 +572,7 @@ class Experiment:
         server.join()
 
     def worker_func(self, task_index):
-        env = environment.Environment.from_conf(self.conf.environment_conf)
-        worker = Worker(task_index, self.there_pipes[task_index], env, self.cluster, self.logdir, self.goal_library, self.conf)
+        worker = Worker(task_index, self.there_pipes[task_index], self.cluster, self.logdir, self.goal_library, self.conf)
         if task_index == 0:
             worker.initialize()
         else:
