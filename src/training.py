@@ -36,13 +36,13 @@ if __name__ == "__main__":
         '-np', '--n-parameter-servers',
         type=int,
         help="Number of parameter servers.",
-        default=2
+        default=1
     )
     parser.add_argument(
         '-nw', '--n-workers',
         type=int,
         help="Number of workers.",
-        default=5
+        default=4
     )
     parser.add_argument(
         '-d', '--description',
