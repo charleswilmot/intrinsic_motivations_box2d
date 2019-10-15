@@ -333,7 +333,7 @@ class Worker:
         self.goal_library.save_vision(goaldir + "/worker{}/".format(self.task_index))
         self.pipe.send("{} saved vision related to the goals in the goals library".format(self.name))
 
-    def save_video(self, path, goal_index, n_frames=2000, training=True):
+    def save_video(self, path, goal_index, n_frames=2000, training=False):
         # goal_index, goal = self.goal_library.select_goal_learning_potential(self.goal_temperature)
         win = viewer.SkinAgentWindow(self.discount_factor, return_lookback=50, show=False)
         win.set_return_lim([-0.1, 1 / (1 - self.discount_factor) + 0.1])
@@ -374,6 +374,50 @@ class Worker:
                 frame = np.fromstring(win.fig.canvas.tostring_argb(), dtype=np.uint8).reshape(height, width, 4)
                 frame = frame[:, :, 1:]               # if we discard the alpha chanel
                 writer.append_data(frame)
+        self.pipe.send("{} saved video under {}".format(self.name, path))
+
+    def save_video_all_goals(self, path, n_frames=50, training=False):
+        win = viewer.SkinAgentWindow(self.discount_factor, return_lookback=50, show=False)
+        win.set_return_lim([-0.1, 1 / (1 - self.discount_factor) + 0.1])
+        width, height = win.fig.canvas.get_width_height()
+        with get_writer(path + "/bragging.mp4", fps=25, format="mp4", quality=5) as writer:
+            for goal_index in np.argsort(self.goal_library.goal_array["r|p"])[::-1]:
+                goal_info = self.goal_library.goal_info(goal_index)
+                goal = goal_info["intensities"]
+                reaching_probability = goal_info["r|p"]
+                goals = goal[np.newaxis, :]
+                if training:
+                    action_fetches = self.goal_tensors[goal_index]["sampled_actions_indices"]
+                else:
+                    action_fetches = self.goal_tensors[goal_index]["greedy_actions_indices"]
+                critic_fetches = self.goal_tensors[goal_index]["critic_out"]
+                fetches = [action_fetches, critic_fetches]
+                print("{} goal index: {: 3d}    reaching probability: {:.2f}".format(self.name, goal_index, reaching_probability))
+                for i in range(n_frames):
+                    feed_dict = self.to_feed_dict(states=self.get_state(True))
+                    actions, predicted_returns = self.sess.run(fetches, feed_dict=feed_dict)
+                    action = actions[0]
+                    # set positions in env
+                    action_dict = self.actions_dict_from_indices(action)
+                    # self.env.set_positions(action_dict)
+                    self.env.set_speeds(action_dict)
+                    # run action in env
+                    self.env.env_step()
+                    # get current vision
+                    vision = self.env.vision
+                    tactile_true = self.env.tactile
+                    current_reward = np_discretization_reward(tactile_true, goal)
+                    predicted_return = np.max(predicted_returns)
+                    # display
+                    win(vision, tactile_true, goal, current_reward, predicted_return, reaching_probability=reaching_probability)
+                    ############
+                    # methode 1: ( https://matplotlib.org/3.1.1/gallery/animation/frame_grabbing_sgskip.html )
+                    # writer.grab_frame()
+                    ############
+                    # methode 2: ( http://www.icare.univ-lille1.fr/tutorials/convert_a_matplotlib_figure )
+                    frame = np.fromstring(win.fig.canvas.tostring_argb(), dtype=np.uint8).reshape(height, width, 4)
+                    frame = frame[:, :, 1:]               # if we discard the alpha chanel
+                    writer.append_data(frame)
         self.pipe.send("{} saved video under {}".format(self.name, path))
 
     def rewards_to_return(self, rewards, prev_return=0):
@@ -667,6 +711,13 @@ class Experiment:
             self.here_worker_pipes[i % n_workers].send(("save_video", path, i, n_frames, training))
         for i in range(self.library_size):
             print(self.here_worker_pipes[i % n_workers].recv())
+
+    def save_video_all_goals(self, name, path=None, n_frames=50, training=False):
+        path = self.videodir + "/" + name + "/" if path is None else path + "/" + name + "/"
+        os.mkdir(path)
+        n_workers = len(self.here_worker_pipes)
+        self.here_worker_pipes[0].send(("save_video_all_goals", path, n_frames, training))
+        print(self.here_worker_pipes[0].recv())
 
     def save_contact_logs(self, name):
         for p in self.here_worker_pipes:
