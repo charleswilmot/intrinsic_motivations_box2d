@@ -10,6 +10,10 @@ default_epsilon = 0.05
 default_discount_factor = 0.9
 
 
+def bool_helper(thing):
+    return thing in ["True", "true", 1, "1"]
+
+
 def make_experiment_path(date=None, clr=None, epsilon=None, discount_factor=None, description=None):
     date = date if date else time.strftime("%Y_%m_%d-%H.%M.%S", time.localtime())
     clr = clr if clr else default_clr
@@ -115,6 +119,12 @@ if __name__ == "__main__":
         help="Strategy for the HER."
     )
     parser.add_argument(
+        '-pt', '--parametrization-type',
+        type=str,
+        default="none",
+        help="Parametrization type. ('none', 'concat' or 'affine', case independent)"
+    )
+    parser.add_argument(
         '-bs', '--buffer-size',
         type=int,
         default=100,
@@ -159,7 +169,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '-na', '--n-actions',
         type=int,
-        default=10,
+        default=11,
         help="Number of actions in the action set."
     )
     parser.add_argument(
@@ -216,6 +226,12 @@ if __name__ == "__main__":
         default=128,
         help="Parameter controling the discretization of the join position / speeds."
     )
+    parser.add_argument(
+        '-v', '--video',
+        type=bool_helper,
+        default=True,
+        help="Should generate videos?"
+    )
     args = parser.parse_args()
 
     if not args.experiment_path:
@@ -247,6 +263,8 @@ if __name__ == "__main__":
         experiment.take_goal_library_snapshot()
         experiment.print_goal_library()
         experiment.dump_goal_library()
-        experiment.save_video("final")
+        if args.video:
+            experiment.save_video("final")
+            experiment.save_video_all_goals("bragging", n_frames=150)
         if not (i + 1) % 100 == 0:
             experiment.save_model()

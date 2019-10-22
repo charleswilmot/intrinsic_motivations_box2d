@@ -245,7 +245,9 @@ class GoalLibrary:
         ax_rp.plot(current_iterations, current_rp)
         ax_rnp.plot(current_iterations, current_rnp)
         ax_drp.plot(current_iterations, current_drp)
-        ax_diff.plot(current_iterations, current_diff)
+        diff_maxi = np.max(current_diff)
+        color = "r" if diff_maxi < 0.01 else "b" if diff_maxi < 0.1 else "g"
+        ax_diff.plot(current_iterations, current_diff, color=color)
         ax_drp.axhline(0, color="k", ls="--")
         ax_diff.axhline(0, color="k", ls="--")
         im_data = self.vision_array[goal_index]
@@ -264,6 +266,7 @@ class GoalLibrary:
         ax_rnp.set_ylabel("r|~p")
         ax_drp.set_ylabel("delta r|p")
         ax_diff.set_ylabel("diff")
+        ax_diff.set_ylim(bottom=0)
 
     def __str__(self):
         string = ""
