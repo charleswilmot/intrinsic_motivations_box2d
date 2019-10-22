@@ -13,7 +13,8 @@ import subprocess
 import numpy as np
 from numpy import pi, log
 import tensorflow as tf
-import tensorflow.contrib.layers as tl
+from tensorflow.contrib.keras import models
+from tensorflow.contrib.keras import layers
 import time
 import viewer
 import os
@@ -72,6 +73,74 @@ def get_available_port(start_port=6006):
     return port
 
 
+class MergeDenseNet(layers.Layer):
+    def __init__(self, n_out):
+        super().__init__()
+        self.n_out = n_out
+        self.layer1 = layers.Dense(200, activation=tf.nn.leaky_relu)
+        self.layer2 = layers.Dense(200, activation=tf.nn.leaky_relu)
+        self.layer3 = layers.Dense(200, activation=tf.nn.tanh)
+        self.layer4 = layers.Dense(n_out, activation=None)
+
+
+class ConcatDenseNet(MergeDenseNet):
+    def call(self, inputs):
+        tensor, param = inputs
+        tensor = self.layer1(tensor)
+        tensor = tf.concat([tensor, param], axis=-1)
+        tensor = self.layer2(tensor)
+        tensor = tf.concat([tensor, param], axis=-1)
+        tensor = self.layer3(tensor)
+        tensor = tf.concat([tensor, param], axis=-1)
+        tensor = self.layer4(tensor)
+        return tensor
+
+class RegularDenseNet(MergeDenseNet):
+    def call(self, inputs):
+        tensor, param = inputs
+        tensor = self.layer1(tensor)
+        tensor = self.layer2(tensor)
+        tensor = self.layer3(tensor)
+        tensor = self.layer4(tensor)
+        return tensor
+
+class AffineDenseNet(MergeDenseNet):
+    def __init__(self, n_out, n_hidden_units=200):
+        super().__init__(n_out)
+        self.layer1_1 = layers.Dense(n_hidden_units, activation=tf.nn.leaky_relu)
+        self.layer1_2 = layers.Dense(200 * 2, activation=tf.nn.leaky_relu)
+        self.layer2_1 = layers.Dense(n_hidden_units, activation=tf.nn.leaky_relu)
+        self.layer2_2 = layers.Dense(200 * 2, activation=tf.nn.leaky_relu)
+        self.layer3_1 = layers.Dense(n_hidden_units, activation=tf.nn.leaky_relu)
+        self.layer3_2 = layers.Dense(200 * 2, activation=tf.nn.leaky_relu)
+        self.layer4_1 = layers.Dense(n_hidden_units)
+        self.layer4_2 = layers.Dense(self.n_out * 2)
+
+    def call(self, inputs):
+        tensor, param = inputs
+        tensor = self.layer1(tensor)
+        scale_shift = self.layer1_1(param)
+        scale_shift = self.layer1_2(scale_shift)
+        scale, shift = scale_shift[..., :200], scale_shift[..., 200:]
+        tensor = tensor * scale + shift
+        tensor = self.layer2(tensor)
+        scale_shift = self.layer2_1(param)
+        scale_shift = self.layer2_2(scale_shift)
+        scale, shift = scale_shift[..., :200], scale_shift[..., 200:]
+        tensor = tensor * scale + shift
+        tensor = self.layer3(tensor)
+        scale_shift = self.layer3_1(param)
+        scale_shift = self.layer3_2(scale_shift)
+        scale, shift = scale_shift[..., :200], scale_shift[..., 200:]
+        tensor = tensor * scale + shift
+        tensor = self.layer4(tensor)
+        scale_shift = self.layer4_1(param)
+        scale_shift = self.layer4_2(scale_shift)
+        scale, shift = scale_shift[..., :self.n_out], scale_shift[..., self.n_out:]
+        tensor = tensor * scale + shift
+        return tensor
+
+
 class Worker:
     def __init__(self, task_index, pipe, cluster, logdir, goal_library, conf):
         self.task_index = task_index
@@ -97,6 +166,7 @@ class Worker:
         self.n_actions = self.conf.worker_conf.n_actions
         self.actions_ground_to_arm = np.linspace(-3.14, 3.14, self.n_actions)
         self.actions_arm_to_arm = np.linspace(-3.14, 3.14, self.n_actions)
+        self.parametrization_type = self.conf.worker_conf.parametrization_type
         self.pipe = pipe
         self.replay_buffer = Buffer(self.replay_buffer_size)
         p, s, t = self.get_state()
@@ -161,38 +231,62 @@ class Worker:
         n_updates += global_step
         while global_step < n_updates - self._n_workers:
             # Collect some experience
-            # returns a trajectory return (state_positions, state_speeds, state_tactile), goals, actions, rewards
-            states, goals, goal_index, actions, rewards = self.run_n_steps()
+            trajectory = self.run_n_steps()
             # Place in buffer
+            self.replay_buffer.incorporate(trajectory)
             if self.her_strategy.lower() == "none":
-                self.replay_buffer.incorporate((states, goals, index, actions, rewards))
+                pass
             elif self.her_strategy.lower() == "first_contact":
-                for tactile in states[2]:
+                for tactile in trajectory["state_tactile"]:
                     if np.sum(tactile) > 0:
-                        faked_index = self.goal_library.index_of(tactile)
-                        faked_goals = np.repeat(tactile, self.sequence_length, 0)
-                        faked_rewards = np_discretization_reward(states[2], faked_goals)
-                        self.replay_buffer.incorporate((states, faked_goals, faked_index, actions, faked_rewards))
+                        faked_goals = np.repeat(tactile[np.newaxis], self.sequence_length, 0)
+                        faked_rewards = np_discretization_reward(trajectory["state_tactile"], faked_goals) * (1 - self.discount_factor)
+                        faked_trajectory = {
+                            "state_position": trajectory["state_position"],
+                            "state_speed": trajectory["state_speed"],
+                            "state_tactile": trajectory["state_tactile"],
+                            "actions": trajectory["actions"],
+                            "goals": faked_goals,
+                            "rewards": faked_rewards
+                        }
+                        self.replay_buffer.incorporate(faked_trajectory)
                         break
             elif self.her_strategy.lower() == "all_contacts":
-                index_done = set()
-                for tactile in states[2]:
+                goals_done = []
+                for tactile in trajectory["state_tactile"]:
                     if np.sum(tactile) > 0:
-                        faked_index = self.goal_library.index_of(tactile)
-                        if faked_index not in index_done:
-                            index_done.add(faked_index)
-                            faked_goals = np.repeat(tactile[np.newaxis, :], self.sequence_length, 0)
-                            faked_rewards = np_discretization_reward(states[2], faked_goals)
-                            self.replay_buffer.incorporate((states, faked_goals, faked_index, actions, faked_rewards))
-            elif self.her_strategy.lower() == "something_else":
-                raise NotImplementedError("not implemented")
+                        # check if a similar fake goal has already been added to the replay buffer
+                        if len(goals_done) > 0:
+                            goals = np.repeat(tactile[np.newaxis], len(goals_done), 0)
+                            rewards = np_discretization_reward(goals, goals_done)
+                        if len(goals_done) == 0 or (rewards != 1).all():
+                            goals_done.append(tactile)
+                            faked_goals = np.repeat(tactile[np.newaxis], self.sequence_length, 0)
+                            faked_rewards = np_discretization_reward(trajectory["state_tactile"], faked_goals) * (1 - self.discount_factor)
+                            faked_trajectory = {
+                                "state_position": trajectory["state_position"],
+                                "state_speed": trajectory["state_speed"],
+                                "state_tactile": trajectory["state_tactile"],
+                                "actions": trajectory["actions"],
+                                "goals": faked_goals,
+                                "rewards": faked_rewards
+                            }
+                            self.replay_buffer.incorporate(faked_trajectory)
+            else:
+                raise NotImplementedError("HER strategy not recognized ({})".format(self.her_strategy))
             # Update the global networks
             trajectories = self.replay_buffer.batch(self.updates_per_episode)
-            for trajectory in trajectories:
-                global_step = self.update_reinforcement_learning(*trajectory)
-                if global_step >= n_updates - self._n_workers:
-                    break
-        self.summary_writer.flush()
+            stacked_trajectories = {
+                "state_position": np.stack([x["state_position"] for x in trajectories]),
+                "state_speed": np.stack([x["state_speed"] for x in trajectories]),
+                "state_tactile": np.stack([x["state_tactile"] for x in trajectories]),
+                "actions": np.stack([x["actions"] for x in trajectories]),
+                "goals": np.stack([x["goals"] for x in trajectories]),
+                "rewards": np.stack([x["rewards"] for x in trajectories])
+            }
+            global_step = self.update_reinforcement_learning(stacked_trajectories)
+            if global_step >= n_updates - self._n_workers:
+                break
         self.pipe.send("{} going IDLE".format(self.name))
 
     def run_display(self, training=True):
@@ -239,10 +333,11 @@ class Worker:
         self.env.save_contact_logs(path)
         self.pipe.send("{} saved contact logs under {}".format(self.name, path))
 
-    def get_action(self, goal_index):
-        feed_dict = self.to_feed_dict(states=self.get_state(True))
-        action = self.sess.run(self.goal_tensors[goal_index]["sampled_actions_indices"], feed_dict=feed_dict)
-        return action[0]
+    def get_action(self, goal):
+        goals = goal[np.newaxis, np.newaxis]
+        feed_dict = self.to_feed_dict(states=self.get_state(True), goals=goals)
+        action = self.sess.run(self.sampled_actions_indices, feed_dict=feed_dict)[0, 0]
+        return action
 
     def populate_goal_library(self):
         no_goal = np.zeros(self._t_size)
@@ -262,32 +357,40 @@ class Worker:
         self.pipe.send("{} goal library full".format(self.name))
 
     def run_n_steps(self):
-        state_positions = np.zeros((self.sequence_length, ) + self._p_size)
-        state_speeds = np.zeros((self.sequence_length, ) + self._s_size)
+        state_position = np.zeros((self.sequence_length, ) + self._p_size)
+        state_speed = np.zeros((self.sequence_length, ) + self._s_size)
         state_tactile = np.zeros((self.sequence_length, ) + self._t_size)
         # goal_index, goal = self.goal_library.select_goal_learning_potential(self.softmax_temperature)
         goal_index, goal = self.goal_library.select_goal_uniform_reachable_only(min_prob=self.min_reaching_prob)
-        goals = np.repeat(goal[np.newaxis, :], self.sequence_length, 0)
+        goals = np.repeat(goal[np.newaxis], self.sequence_length, 0)
         actions = np.zeros((self.sequence_length, 4))
         rewards = np.zeros((self.sequence_length, ))
         for iteration in range(self.sequence_length):
             # get action
-            action = self.get_action(goal_index)
+            action = self.get_action(goal)
             actions[iteration] = action
             # set action
             # self.env.set_positions(self.actions_dict_from_indices(action))
             self.env.set_speeds(self.actions_dict_from_indices(action))
             # get states
-            state_positions[iteration], state_speeds[iteration], state_tactile[iteration] = self.get_state()
+            state_position[iteration], state_speed[iteration], state_tactile[iteration] = self.get_state()
             reward = self.goal_library.register_goal(
                 observed_goal=state_tactile[iteration],
                 pursued_goal=goal,
-                vision=self.env.vision)  # point is to have a snapshot of the contact stored in the library
+                vision=self.env.vision) * (1 - self.discount_factor)  # point is to have a snapshot of the contact stored in the library
             rewards[iteration] = reward  # different way of computing the reward (numpy vs tensorflow) see run_n_display_steps
             # run environment step
             self.env.env_step()
         self.randomize_env()
-        return (state_positions, state_speeds, state_tactile), goals, goal_index, actions, rewards
+        trajectory = {
+            "state_position": state_position,
+            "state_speed": state_speed,
+            "state_tactile": state_tactile,
+            "actions": actions,
+            "goals": goals,
+            "rewards": rewards
+        }
+        return trajectory
 
     def randomize_env(self, n=None, _answer=False):
         n = 5 if n is None else n
@@ -305,16 +408,17 @@ class Worker:
         goal_index, goal = self.goal_library.select_goal_uniform_learned_only(min_prob=0.07)
         reaching_probability = self.goal_library.goal_info(goal_index)["r|p"]
         if training:
-            action_fetches = self.goal_tensors[goal_index]["sampled_actions_indices"]
+            action_fetches = self.sampled_actions_indices
+            critic_fetches = self.sampled_q_value
         else:
-            action_fetches = self.goal_tensors[goal_index]["greedy_actions_indices"]
-        critic_fetches = self.goal_tensors[goal_index]["critic_out"]
+            action_fetches = self.greedy_actions_indices
+            critic_fetches = self.greedy_q_value
         fetches = [action_fetches, critic_fetches]
         for i in range(self.sequence_length):
-            feed_dict = self.to_feed_dict(states=self.get_state(True))
-            actions, predicted_returns = self.sess.run(fetches, feed_dict=feed_dict)
-            action = actions[0]
-            rewards[i] = np_discretization_reward(self.env.tactile, goal)
+            feed_dict = self.to_feed_dict(states=self.get_state(True), goals=goal[np.newaxis, np.newaxis])
+            action, predicted_returns = self.sess.run(fetches, feed_dict=feed_dict)
+            action = action[0, 0]
+            rewards[i] = np_discretization_reward(self.env.tactile, goal) * (1 - self.discount_factor)
             # set positions in env
             # self.env.set_positions(self.actions_dict_from_indices(action))
             self.env.set_speeds(self.actions_dict_from_indices(action))
@@ -336,23 +440,24 @@ class Worker:
     def save_video(self, path, goal_index, n_frames=2000, training=False):
         # goal_index, goal = self.goal_library.select_goal_learning_potential(self.goal_temperature)
         win = viewer.SkinAgentWindow(self.discount_factor, return_lookback=50, show=False)
-        win.set_return_lim([-0.1, 1 / (1 - self.discount_factor) + 0.1])
+        win.set_return_lim([-0.1, 1.1])
         width, height = win.fig.canvas.get_width_height()
         goal_info = self.goal_library.goal_info(goal_index)
         goal = goal_info["intensities"]
         reaching_probability = goal_info["r|p"]
         goals = goal[np.newaxis, :]
         if training:
-            action_fetches = self.goal_tensors[goal_index]["sampled_actions_indices"]
+            action_fetches = self.sampled_actions_indices
+            critic_fetches = self.sampled_q_value
         else:
-            action_fetches = self.goal_tensors[goal_index]["greedy_actions_indices"]
-        critic_fetches = self.goal_tensors[goal_index]["critic_out"]
+            action_fetches = self.greedy_actions_indices
+            critic_fetches = self.greedy_q_value
         fetches = [action_fetches, critic_fetches]
         with get_writer(path + "/{:04d}.avi".format(goal_index), fps=25, format="avi", quality=5) as writer:
             for i in range(n_frames):
-                feed_dict = self.to_feed_dict(states=self.get_state(True))
-                actions, predicted_returns = self.sess.run(fetches, feed_dict=feed_dict)
-                action = actions[0]
+                feed_dict = self.to_feed_dict(states=self.get_state(True), goals=goal[np.newaxis, np.newaxis])
+                action, predicted_returns = self.sess.run(fetches, feed_dict=feed_dict)
+                action = action[0, 0]
                 # set positions in env
                 action_dict = self.actions_dict_from_indices(action)
                 # self.env.set_positions(action_dict)
@@ -362,7 +467,7 @@ class Worker:
                 # get current vision
                 vision = self.env.vision
                 tactile_true = self.env.tactile
-                current_reward = np_discretization_reward(tactile_true, goal)
+                current_reward = np_discretization_reward(tactile_true, goal) * (1 - self.discount_factor)
                 predicted_return = np.max(predicted_returns)
                 # display
                 win(vision, tactile_true, goal, current_reward, predicted_return, reaching_probability=reaching_probability)
@@ -378,7 +483,7 @@ class Worker:
 
     def save_video_all_goals(self, path, n_frames=50, training=False):
         win = viewer.SkinAgentWindow(self.discount_factor, return_lookback=50, show=False)
-        win.set_return_lim([-0.1, 1 / (1 - self.discount_factor) + 0.1])
+        win.set_return_lim([-0.1, 1.1])
         width, height = win.fig.canvas.get_width_height()
         with get_writer(path + "/bragging.mp4", fps=25, format="mp4", quality=5) as writer:
             for goal_index in np.argsort(self.goal_library.goal_array["r|p"])[::-1]:
@@ -387,16 +492,17 @@ class Worker:
                 reaching_probability = goal_info["r|p"]
                 goals = goal[np.newaxis, :]
                 if training:
-                    action_fetches = self.goal_tensors[goal_index]["sampled_actions_indices"]
+                    action_fetches = self.sampled_actions_indices
+                    critic_fetches = self.sampled_q_value
                 else:
-                    action_fetches = self.goal_tensors[goal_index]["greedy_actions_indices"]
-                critic_fetches = self.goal_tensors[goal_index]["critic_out"]
+                    action_fetches = self.greedy_actions_indices
+                    critic_fetches = self.greedy_q_value
                 fetches = [action_fetches, critic_fetches]
                 print("{} goal index: {: 3d}    reaching probability: {:.2f}".format(self.name, goal_index, reaching_probability))
                 for i in range(n_frames):
-                    feed_dict = self.to_feed_dict(states=self.get_state(True))
-                    actions, predicted_returns = self.sess.run(fetches, feed_dict=feed_dict)
-                    action = actions[0]
+                    feed_dict = self.to_feed_dict(states=self.get_state(True), goals=goal[np.newaxis, np.newaxis])
+                    action, predicted_returns = self.sess.run(fetches, feed_dict=feed_dict)
+                    action = action[0, 0]
                     # set positions in env
                     action_dict = self.actions_dict_from_indices(action)
                     # self.env.set_positions(action_dict)
@@ -406,7 +512,7 @@ class Worker:
                     # get current vision
                     vision = self.env.vision
                     tactile_true = self.env.tactile
-                    current_reward = np_discretization_reward(tactile_true, goal)
+                    current_reward = np_discretization_reward(tactile_true, goal) * (1 - self.discount_factor)
                     predicted_return = np.max(predicted_returns)
                     # display
                     win(vision, tactile_true, goal, current_reward, predicted_return, reaching_probability=reaching_probability)
@@ -422,115 +528,133 @@ class Worker:
 
     def rewards_to_return(self, rewards, prev_return=0):
         returns = np.zeros_like(rewards)
-        for i in range(len(rewards) - 1, -1, -1):
-            r = rewards[i]
+        for i in range(rewards.shape[-1] - 1, -1, -1):
+            r = rewards[:, i]
             prev_return = r + self.discount_factor * prev_return
-            returns[i] = prev_return
+            returns[:, i] = prev_return
         return returns
 
-    def update_reinforcement_learning(self, states, goals, goal_index, actions, rewards):
-        state_positions, state_speeds, state_tactile = states
-        feed_dict = self.to_feed_dict(states=states, actions=actions, rewards=rewards)
+    def update_reinforcement_learning(self, trajectories):
+        states = trajectories["state_position"], trajectories["state_speed"], trajectories["state_tactile"]
+        actions = trajectories["actions"]
+        rewards = trajectories["rewards"]
+        goals = trajectories["goals"]
+        feed_dict = self.to_feed_dict(states=states, actions=actions, rewards=rewards, goals=goals)
         fetches = [
-            self.global_step_inc,
-            self.goal_tensors[goal_index]["train_op"],
-            self.goal_tensors[goal_index]["summary"]]
+            self.global_step,
+            self.train_op,
+            self.summary]
         global_step, _, summary = self.sess.run(fetches, feed_dict=feed_dict)
-        self.summary_writer.add_summary(summary, global_step=global_step)
         if global_step % 100 == 0:
+            self.summary_writer.add_summary(summary, global_step=global_step)
             print("{} finished update number {}".format(self.name, global_step))
         return global_step
 
-    def define_goal_network(self, goal_index):
-        print("{} defining network for goal {}".format(self.name, goal_index))
-        critic_outs, greedy, sampled, all_losses, total_loss = [], [], [], [], 0
-        for j in range(4):
-            prev_layer = self.rl_inputs
-            for i, d in zip(range(3), [60, 60, self.n_actions]):
-                activation_fn = lrelu if i < 2 else None
-                prev_layer = tl.fully_connected(prev_layer, d, scope="goal{}_joint{}_layer{}".format(goal_index, j, i), activation_fn=activation_fn)
-            out_layer = prev_layer
-            # ACTIONS
-            greedy_actions_indices = tf.argmax(out_layer, axis=-1)
-            condition = tf.greater(tf.random_uniform(shape=(self.batch_size,)), self.epsilon)
-            random = tf.random_uniform(shape=(self.batch_size,), maxval=self.n_actions, dtype=tf.int64)
-            sampled_actions_indices = tf.where(condition, x=greedy_actions_indices, y=random)
-            # LOSSES
-            start = tf.reduce_max(out_layer[-1])
-            returns = self.returns_not_bootstraped + self.increasing_discounted_gammas * tf.stop_gradient(start)
-            critic_values_picked_actions = tf.gather_nd(out_layer, self.indices_actions_tab[j])
-            losses = (critic_values_picked_actions - returns) ** 2 * (1 - self.discount_factor)
-            mask = self.action_mask[j]
-            stay_the_same_loss = mask * (out_layer - tf.stop_gradient(out_layer)) ** 2
-            loss = (tf.reduce_sum(losses) + tf.reduce_sum(stay_the_same_loss)) / self.n_actions
-            # STORE
-            critic_outs.append(out_layer)
-            greedy.append(greedy_actions_indices)
-            sampled.append(sampled_actions_indices)
-            all_losses.append(loss)
-        losses = tf.stack(all_losses, axis=0)
-        loss = tf.reduce_sum(losses)
-        # SUMMARIES
-        loss_summary = tf.summary.scalar("/{}/loss_all".format(goal_index), loss)
-        joint_loss_summary_0 = tf.summary.scalar("/{}/loss_0".format(goal_index), all_losses[0])
-        joint_loss_summary_1 = tf.summary.scalar("/{}/loss_1".format(goal_index), all_losses[1])
-        joint_loss_summary_2 = tf.summary.scalar("/{}/loss_2".format(goal_index), all_losses[2])
-        joint_loss_summary_3 = tf.summary.scalar("/{}/loss_3".format(goal_index), all_losses[3])
-        summary = tf.summary.merge([
-            loss_summary,
-            joint_loss_summary_0,
-            joint_loss_summary_1,
-            joint_loss_summary_2,
-            joint_loss_summary_3])
-        self.goal_tensors[goal_index] = {
-            "critic_out": tf.stack(critic_outs, axis=1),
-            "greedy_actions_indices": tf.stack(greedy, axis=1),
-            "sampled_actions_indices": tf.stack(sampled, axis=1),
-            "losses": losses,
-            "loss": loss,
-            "train_op": tf.train.AdamOptimizer(self.critic_lr).minimize(loss),
-            "summary": summary
-        }
-
     def define_networks(self):
-        self.inp_discrete_positions = tf.placeholder(shape=(None, ) + self._p_size, dtype=tf.float32)
-        self.inp_discrete_speeds = tf.placeholder(shape=(None, ) + self._s_size, dtype=tf.float32)
-        self.inp_tactile = tf.placeholder(shape=(None, ) + self._t_size, dtype=tf.float32)
-        self.actions_indices_placeholder = tf.placeholder(shape=(None, 4), dtype=tf.int32)
-        self.rl_inputs = tf.concat(
-            [tf.reshape(self.inp_discrete_positions, (-1, np.prod(self._p_size))),
-             tf.reshape(self.inp_discrete_speeds, (-1, np.prod(self._s_size))),
+        n_trajectories = None
+        trajectory_length = None
+        self.inp_discrete_positions = tf.placeholder(shape=(n_trajectories, trajectory_length, ) + self._p_size, dtype=tf.float32)
+        self.inp_discrete_speeds = tf.placeholder(shape=(n_trajectories, trajectory_length, ) + self._s_size, dtype=tf.float32)
+        self.inp_tactile = tf.placeholder(shape=(n_trajectories, trajectory_length, ) + self._t_size, dtype=tf.float32)
+        self.inp_goal = tf.placeholder(shape=(n_trajectories, trajectory_length) + self._t_size, dtype=tf.float32)
+        self.actions_indices_placeholder = tf.placeholder(shape=(n_trajectories, trajectory_length, 4), dtype=tf.int32)
+        ### can potentially be replaced with pure tensorflow: (calling python, like in asynchronous-aec)
+        ### see the use of the scan function: https://github.com/tensorflow/agents/blob/master/tf_agents/utils/value_ops.py
+        self.returns_not_bootstraped = tf.placeholder(shape=(n_trajectories, trajectory_length), dtype=tf.float32, name="returns_target")
+        shape = tf.shape(self.inp_discrete_positions)
+        n_trajectories = shape[0]
+        trajectory_length = shape[1]
+        increasing_discounted_gammas = tf.cumprod(tf.fill(dims=[trajectory_length], value=self.discount_factor), reverse=True)
+        increasing_discounted_gammas = increasing_discounted_gammas[tf.newaxis, :, tf.newaxis]
+
+
+        position_size = np.prod(self._p_size)
+        speed_size = np.prod(self._s_size)
+        tactile_size = np.prod(self._t_size)
+        state_size = position_size + speed_size + tactile_size
+        goal_size = tactile_size
+        input_shape = (state_size + goal_size,)
+        param_shape = (goal_size, )
+
+        self.state = tf.concat(
+            [tf.reshape(self.inp_discrete_positions, (n_trajectories, trajectory_length, position_size)),
+             tf.reshape(self.inp_discrete_speeds, (n_trajectories, trajectory_length, speed_size)),
              self.inp_tactile],
             axis=-1)
-        self.batch_size = tf.shape(self.rl_inputs)[0]
-        self.returns_not_bootstraped = tf.placeholder(shape=[None], dtype=tf.float32, name="returns_target")
-        batch_size = tf.shape(self.rl_inputs)[0]
-        constant_gammas = tf.fill(dims=[batch_size], value=self.discount_factor)
-        self.increasing_discounted_gammas = tf.cumprod(constant_gammas, reverse=True)
+        self.rl_inputs = tf.concat([self.state, self.inp_goal], axis=-1)
+        parametrization_data = self.inp_goal
 
-        self.indices_actions_tab = [tf.stack([tf.range(self.batch_size), self.actions_indices_placeholder[:, j]], axis=1) for j in range(4)]
-        self.action_mask = [tf.one_hot(
-              self.actions_indices_placeholder[:, j],
-              self.n_actions,
-              on_value=0.0,
-              off_value=1.0
-        ) for j in range(4)]
+        ### DEFINE KERAS MODEL ###
+        if self.parametrization_type.lower() == "none":
+            ModelClass = RegularDenseNet
+        elif self.parametrization_type.lower() == "concat":
+            ModelClass = ConcatDenseNet
+        elif self.parametrization_type.lower() == "affine":
+            ModelClass = AffineDenseNet
+        else:
+            raise NotImplementedError("parametrization_type not recognized")
+
+        n_joints = 4
+
+        networks = [ModelClass(n_out=self.n_actions) for i in range(n_joints)]
+        all_values = [network((self.state, parametrization_data)) for network in networks]
+        all_values = tf.stack(all_values, axis=2)  # should have shape (N_TRAJECTORIES, TRAJECTORY_LENGTH, 4, N_ACTIONS)
+
+        ntraj = tf.range(n_trajectories)
+        tragl = tf.range(trajectory_length)
+        jointn = tf.range(n_joints)
+        grid_indices = tf.meshgrid(ntraj, tragl, jointn, indexing="ij")  # all have shape (N_TRAJECTORIES, TRAJECTORY_LENGTH, 4)
+        indices = tf.stack(grid_indices + [self.actions_indices_placeholder], axis=-1) # should have shape (N_TRAJECTORIES, TRAJECTORY_LENGTH, 4, 4)
+        values_of_picked_actions = tf.gather_nd(all_values, indices)  # should have shape (N_TRAJECTORIES, TRAJECTORY_LENGTH, 4)
+
+        last_values = all_values[:, -1:]  # should have shape (N_TRAJECTORIES, 1, 4, N_ACTIONS)
+        max_last_values = tf.reduce_max(last_values, axis=-1)  # shape should be (N_TRAJECTORIES, 1, 4)
+        # shape should be (N_TRAJECTORIES, TRAJECTORY_LENGTH, 4):
+        target_values =  self.returns_not_bootstraped[:, :, tf.newaxis] + increasing_discounted_gammas * max_last_values
+        loss = tf.reduce_sum(tf.reduce_mean((target_values - values_of_picked_actions) ** 2, axis=1))
+        mean_abs_distance = tf.reduce_mean(tf.abs(target_values - values_of_picked_actions))
+
         self.epsilon = tf.Variable(self.epsilon_init)
+        self.greedy_actions_indices = tf.cast(tf.argmax(all_values, axis=-1), tf.int32)  # shape should be (N_TRAJECTORIES, TRAJECTORY_LENGTH, 4)
+        random = tf.random_uniform(shape=(n_trajectories, trajectory_length, 4))
+        random_indices = tf.random_uniform(shape=(n_trajectories, trajectory_length, 4), maxval=self.n_actions, dtype=tf.int32)
+        condition = tf.greater(random, self.epsilon)
+        self.sampled_actions_indices = tf.where(condition, self.greedy_actions_indices, random_indices)
+        indices = tf.stack(grid_indices + [self.greedy_actions_indices], axis=-1) # should have shape (N_TRAJECTORIES, TRAJECTORY_LENGTH, 4, 4)
+        self.greedy_q_value = tf.reduce_mean(tf.gather_nd(all_values, indices))
+        indices = tf.stack(grid_indices + [self.sampled_actions_indices], axis=-1) # should have shape (N_TRAJECTORIES, TRAJECTORY_LENGTH, 4, 4)
+        self.sampled_q_value = tf.reduce_mean(tf.gather_nd(all_values, indices))
+
+        ### TRAIN OPS ###
         self.epsilon_update = self.epsilon.assign(self.epsilon * self.epsilon_decay)
-        # DEFINE GOAL NETWORKS
-        self.goal_tensors = [None] * self.goal_library_size
-        for goal_index in range(self.goal_library_size):
-            self.define_goal_network(goal_index)
-        # MICELANEOUS
         self.global_step = tf.Variable(0, dtype=tf.int32)
         self.global_step_inc = self.global_step.assign_add(1)
+        optimizer = tf.train.AdamOptimizer(self.critic_lr)
+        self.minimize_op = optimizer.minimize(loss)
+        self.train_op = tf.group([self.epsilon_update, self.global_step_inc, self.minimize_op])
 
-    def get_state(self, as_trajectory=False):
-        if as_trajectory:
-            return self.env.discrete_positions[np.newaxis, :], self.env.discrete_speeds[np.newaxis, :], self.env.tactile[np.newaxis, :]
+        ### SUMMARIES ###
+        summary_loss = tf.sqrt(loss / tf.cast(n_trajectories * n_joints, tf.float32))
+        loss_summary = tf.summary.scalar("/loss", summary_loss)
+        raw_loss_summary = tf.summary.scalar("/raw_loss", loss)
+        log_loss_summary = tf.summary.scalar("/log_loss", tf.log(summary_loss))
+        mean_abs_distance_summary = tf.summary.scalar("/mean_abs_distance", mean_abs_distance)
+        mean_return_summary = tf.summary.scalar("/mean_return", tf.reduce_mean(self.returns_not_bootstraped))
+        self.summary = tf.summary.merge([
+            loss_summary,
+            log_loss_summary,
+            raw_loss_summary,
+            mean_abs_distance_summary,
+            mean_return_summary])
+
+    def get_state(self, as_multiple_trajectories=False, as_one_trajectory=False):
+        if as_multiple_trajectories:
+            return self.env.discrete_positions[np.newaxis, np.newaxis], self.env.discrete_speeds[np.newaxis, np.newaxis], self.env.tactile[np.newaxis, np.newaxis]
+        if as_one_trajectory:
+            return self.env.discrete_positions[np.newaxis], self.env.discrete_speeds[np.newaxis], self.env.tactile[np.newaxis]
         return self.env.discrete_positions, self.env.discrete_speeds, self.env.tactile
 
-    def to_feed_dict(self, states=None, actions=None, rewards=None):
+    def to_feed_dict(self, states=None, actions=None, rewards=None, goals=None):
         # transforms the inputs into a feed dict for the actor / critic
         feed_dict = {}
         if states is not None:
@@ -542,6 +666,8 @@ class Worker:
             # reverse pass through the rewards here...
             returns = self.rewards_to_return(rewards)
             feed_dict[self.returns_not_bootstraped] = returns
+        if goals is not None:
+            feed_dict[self.inp_goal] = goals
         return feed_dict
 
 

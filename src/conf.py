@@ -21,7 +21,7 @@ class ConfRoot:
 
 class WorkerConf(ConfRoot):
     def __init__(self, discount_factor, sequence_length, critic_learning_rate, epsilon_init, epsilon_decay,
-                       buffer_size, updates_per_episode, her_strategy, n_actions):
+                       buffer_size, updates_per_episode, her_strategy, n_actions, parametrization_type):
         self.discount_factor = discount_factor
         self.sequence_length = sequence_length
         self.critic_learning_rate = critic_learning_rate
@@ -31,6 +31,7 @@ class WorkerConf(ConfRoot):
         self.updates_per_episode = updates_per_episode
         self.her_strategy = her_strategy
         self.n_actions = n_actions
+        self.parametrization_type = parametrization_type
 
     @staticmethod
     def from_args(args):
@@ -42,7 +43,8 @@ class WorkerConf(ConfRoot):
                           args.buffer_size,
                           args.updates_per_episode,
                           args.her_strategy,
-                          args.n_actions)
+                          args.n_actions,
+                          args.parametrization_type)
 
 
 class GoalLibraryConf(ConfRoot):
