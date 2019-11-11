@@ -21,7 +21,7 @@ class ConfRoot:
 
 class WorkerConf(ConfRoot):
     def __init__(self, discount_factor, sequence_length, critic_learning_rate, epsilon_init, epsilon_decay,
-                       buffer_size, updates_per_episode, her_strategy, n_actions, parametrization_type):
+                       buffer_size, updates_per_episode, batch_size, her_strategy, n_actions, parametrization_type):
         self.discount_factor = discount_factor
         self.sequence_length = sequence_length
         self.critic_learning_rate = critic_learning_rate
@@ -29,6 +29,7 @@ class WorkerConf(ConfRoot):
         self.epsilon_decay = epsilon_decay
         self.buffer_size = buffer_size
         self.updates_per_episode = updates_per_episode
+        self.batch_size = batch_size
         self.her_strategy = her_strategy
         self.n_actions = n_actions
         self.parametrization_type = parametrization_type
@@ -42,6 +43,7 @@ class WorkerConf(ConfRoot):
                           args.epsilon_decay,
                           args.buffer_size,
                           args.updates_per_episode,
+                          args.batch_size,
                           args.her_strategy,
                           args.n_actions,
                           args.parametrization_type)

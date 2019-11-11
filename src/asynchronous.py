@@ -162,6 +162,7 @@ class Worker:
         self.min_reaching_prob = self.conf.goal_library_conf.min_reaching_prob
         self.replay_buffer_size = self.conf.worker_conf.buffer_size
         self.updates_per_episode = self.conf.worker_conf.updates_per_episode
+        self.batch_size = self.conf.worker_conf.batch_size
         self.her_strategy = self.conf.worker_conf.her_strategy
         self.n_actions = self.conf.worker_conf.n_actions
         self.actions_ground_to_arm = np.linspace(-3.14, 3.14, self.n_actions)
@@ -236,7 +237,7 @@ class Worker:
             self.replay_buffer.incorporate(trajectory)
             if self.her_strategy.lower() == "none":
                 pass
-            elif self.her_strategy.lower() == "first_contact":
+            elif self.her_strategy.lower() in ["first_contact", "first"]:
                 for tactile in trajectory["state_tactile"]:
                     if np.sum(tactile) > 0:
                         faked_goals = np.repeat(tactile[np.newaxis], self.sequence_length, 0)
@@ -275,18 +276,19 @@ class Worker:
             else:
                 raise NotImplementedError("HER strategy not recognized ({})".format(self.her_strategy))
             # Update the global networks
-            trajectories = self.replay_buffer.batch(self.updates_per_episode)
-            stacked_trajectories = {
-                "state_position": np.stack([x["state_position"] for x in trajectories]),
-                "state_speed": np.stack([x["state_speed"] for x in trajectories]),
-                "state_tactile": np.stack([x["state_tactile"] for x in trajectories]),
-                "actions": np.stack([x["actions"] for x in trajectories]),
-                "goals": np.stack([x["goals"] for x in trajectories]),
-                "rewards": np.stack([x["rewards"] for x in trajectories])
-            }
-            global_step = self.update_reinforcement_learning(stacked_trajectories)
-            if global_step >= n_updates - self._n_workers:
-                break
+            for i in range(self.updates_per_episode):
+               trajectories = self.replay_buffer.batch(self.batch_size)
+               stacked_trajectories = {
+                   "state_position": np.stack([x["state_position"] for x in trajectories]),
+                   "state_speed": np.stack([x["state_speed"] for x in trajectories]),
+                   "state_tactile": np.stack([x["state_tactile"] for x in trajectories]),
+                   "actions": np.stack([x["actions"] for x in trajectories]),
+                   "goals": np.stack([x["goals"] for x in trajectories]),
+                   "rewards": np.stack([x["rewards"] for x in trajectories])
+               }
+               global_step = self.update_reinforcement_learning(stacked_trajectories)
+               if global_step >= n_updates - self._n_workers:
+                   break
         self.pipe.send("{} going IDLE".format(self.name))
 
     def run_display(self, training=True):
@@ -453,7 +455,7 @@ class Worker:
             action_fetches = self.greedy_actions_indices
             critic_fetches = self.greedy_q_value
         fetches = [action_fetches, critic_fetches]
-        with get_writer(path + "/{:04d}.avi".format(goal_index), fps=25, format="avi", quality=5) as writer:
+        with get_writer(path + "/{:04d}.avi".format(goal_index), fps=25, format="mp4") as writer:
             for i in range(n_frames):
                 feed_dict = self.to_feed_dict(states=self.get_state(True), goals=goal[np.newaxis, np.newaxis])
                 action, predicted_returns = self.sess.run(fetches, feed_dict=feed_dict)
@@ -485,7 +487,7 @@ class Worker:
         win = viewer.SkinAgentWindow(self.discount_factor, return_lookback=50, show=False)
         win.set_return_lim([-0.1, 1.1])
         width, height = win.fig.canvas.get_width_height()
-        with get_writer(path + "/bragging.mp4", fps=25, format="mp4", quality=5) as writer:
+        with get_writer(path + "/bragging.mp4", fps=25, format="mp4") as writer:
             for goal_index in np.argsort(self.goal_library.goal_array["r|p"])[::-1]:
                 goal_info = self.goal_library.goal_info(goal_index)
                 goal = goal_info["intensities"]
