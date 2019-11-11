@@ -4,7 +4,7 @@ from training import make_experiment_path
 import os
 
 
-MEM_PER_WORKER = 400
+MEM_PER_WORKER = 900
 MEM_BASELINE = 1000
 
 class ClusterQueue:
@@ -46,33 +46,16 @@ class ClusterQueue:
 
 
 cq = ClusterQueue(
-    description="concat_5e-4_4nets",
+    description="concat_1e-4_4nets_her_first_batch_10_updates_10_big_net",
     discount_factor=0.5,
     n_workers=64,
     sequence_length=50,
     n_actions=11,
     flush_every=2000,
-    n_trajectories=1000000,
-    critic_learning_rate=5e-4,
-    parametrization_type="concat")
-cq = ClusterQueue(
-    description="concat_1e-4_4nets",
-    discount_factor=0.5,
-    n_workers=64,
-    sequence_length=50,
-    n_actions=11,
-    flush_every=2000,
-    n_trajectories=1000000,
+    n_trajectories=2000000,
     critic_learning_rate=1e-4,
-    parametrization_type="concat")
-cq = ClusterQueue(
-    description="concat_5e-4_4nets",
-    discount_factor=0.5,
-    n_workers=64,
-    sequence_length=50,
-    n_actions=11,
-    flush_every=2000,
-    n_trajectories=1000000,
-    critic_learning_rate=5e-4,
-    updates_per_episode=25,
+    her_strategy="first",
+    updates_per_episode=10,
+    batch_size=10,
+    skin_resolution=10,
     parametrization_type="concat")
