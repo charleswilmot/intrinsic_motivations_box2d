@@ -1,0 +1,70 @@
+{
+    "all_body": {
+        "childs": {
+
+            "left_arm": {
+                "policy_model": "DebugPolicyModel()",
+                "state_model": "DebugStateModel()",
+                "critic_model": "DebugCriticModel()",
+                "readout_goal_model": "DebugReadoutGoalModel()",
+                "readout_state_model": "DebugReadoutStateModel()",
+                "readout_gstate_model": "DebugReadoutGStateModel()",
+                "childs": {
+
+                    "left_elbow": {
+                        "policy_model": "DebugPolicyModel()",
+                        "state_model": "DebugStateModel()",
+                        "critic_model": "DebugCriticModel()",
+                        "readout_goal_model": "DebugReadoutGoalModel()",
+                        "readout_state_model": "DebugReadoutStateModel()",
+                        "readout_gstate_model": "DebugReadoutGStateModel()",
+                        "childs": {}
+                    },
+
+                    "left_shoulder": {
+                        "policy_model": "DebugPolicyModel()",
+                        "state_model": "DebugStateModel()",
+                        "critic_model": "DebugCriticModel()",
+                        "readout_goal_model": "DebugReadoutGoalModel()",
+                        "readout_state_model": "DebugReadoutStateModel()",
+                        "readout_gstate_model": "DebugReadoutGStateModel()",
+                        "childs": {}
+                    }
+
+                }
+            },
+
+            "right_arm": {
+                "policy_model": "DebugPolicyModel()",
+                "state_model": "DebugStateModel()",
+                "critic_model": "DebugCriticModel()",
+                "readout_goal_model": "DebugReadoutGoalModel()",
+                "readout_state_model": "DebugReadoutStateModel()",
+                "readout_gstate_model": "DebugReadoutGStateModel()",
+                "childs": {
+                
+                    "right_elbow": {
+                        "policy_model": "DebugPolicyModel()",
+                        "state_model": "DebugStateModel()",
+                        "critic_model": "DebugCriticModel()",
+                        "readout_goal_model": "DebugReadoutGoalModel()",
+                        "readout_state_model": "DebugReadoutStateModel()",
+                        "readout_gstate_model": "DebugReadoutGStateModel()",
+                        "childs": {}
+                    },
+
+                    "right_shoulder": {
+                        "policy_model": "DebugPolicyModel()",
+                        "state_model": "DebugStateModel()",
+                        "critic_model": "DebugCriticModel()",
+                        "readout_goal_model": "DebugReadoutGoalModel()",
+                        "readout_state_model": "DebugReadoutStateModel()",
+                        "readout_gstate_model": "DebugReadoutGStateModel()",
+                        "childs": {}
+                    }
+                
+                }
+            }
+        }
+    }
+}
