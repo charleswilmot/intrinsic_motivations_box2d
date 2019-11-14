@@ -273,9 +273,9 @@ class AgencyModel(AgencyRootModel):
             critic_target = reward + discount_factor * predicted_return
             critic_1_loss = (predicted_return_1 - tf.stop_gradient(critic_target)) ** 2
             critic_2_loss = (predicted_return_2 - tf.stop_gradient(critic_target)) ** 2
-            her_critic_loss_1 = (her_predicted_return_1 - tf.stop_gradient(d(parent_state_0, parent_state_1))) ** 2
-            her_critic_loss_2 = (her_predicted_return_2 - tf.stop_gradient(d(parent_state_0, parent_state_1))) ** 2
-            critic_loss = critic_1_loss + critic_2_loss + her_critic_loss_1 + her_critic_loss_2
+            her_critic_1_loss = (her_predicted_return_1 - tf.stop_gradient(d(parent_state_0, parent_state_1))) ** 2
+            her_critic_2_loss = (her_predicted_return_2 - tf.stop_gradient(d(parent_state_0, parent_state_1))) ** 2
+            critic_loss = critic_1_loss + critic_2_loss + her_critic_1_loss + her_critic_2_loss
             critic_optimizer = tf.train.AdamOptimizer(learning_rate)
             critic_train_op = critic_optimizer.minimize(
                 critic_loss,
@@ -309,6 +309,18 @@ class AgencyModel(AgencyRootModel):
                 tf.reduce_sum(readout_gstate_loss)
             readout_optimizer = tf.train.AdamOptimizer(learning_rate)
             readout_train_op = readout_optimizer.minimize(readout_loss)
+            ### SUMMARIES
+            mean_actor_loss_summary = tf.summary.scalar("/{}/mean_actor_loss".format(self.name), tf.reduce_mean(actor_loss))
+            mean_her_actor_loss_summary = tf.summary.scalar("/{}/mean_her_actor_loss".format(self.name), tf.reduce_mean(her_actor_loss))
+            mean_critic_1_loss_summary = tf.summary.scalar("/{}/mean_critic_1_loss".format(self.name), tf.reduce_mean(critic_1_loss))
+            mean_critic_2_loss_summary = tf.summary.scalar("/{}/mean_critic_2_loss".format(self.name), tf.reduce_mean(critic_2_loss))
+            mean_her_critic_1_loss_summary = tf.summary.scalar("/{}/mean_her_critic_1_loss".format(self.name), tf.reduce_mean(her_critic_1_loss))
+            mean_her_critic_2_loss_summary = tf.summary.scalar("/{}/mean_her_critic_2_loss".format(self.name), tf.reduce_mean(her_critic_2_loss))
+            mean_reward_summary = tf.summary.scalar("/{}/mean_reward".format(self.name), tf.reduce_mean(reward))
+            summary = tf.summary.merge([
+                mean_actor_loss_summary, mean_her_actor_loss_summary, mean_critic_1_loss_summary,
+                mean_critic_2_loss_summary, mean_her_critic_1_loss_summary, mean_her_critic_2_loss_summary,
+                mean_reward_summary])
             ### CALL SUB-AGENTS
             childs = [child(
                         goal_0, state_0, gstate_0,
@@ -340,9 +352,9 @@ class AgencyModel(AgencyRootModel):
                 actor_train_op=actor_train_op,
                 update_target_weights_op=update_target_weights_op,
                 batchnorm_train_op=batchnorm_train_op,
-                her_critic_loss_1=her_critic_loss_1,
+                her_critic_1_loss=her_critic_1_loss,
                 her_predicted_return_1=her_predicted_return_1,
-                her_critic_loss_2=her_critic_loss_2,
+                her_critic_2_loss=her_critic_2_loss,
                 her_predicted_return_2=her_predicted_return_2,
                 her_actor_loss=her_actor_loss,
                 her_goal_0=her_goal_0,
@@ -354,6 +366,7 @@ class AgencyModel(AgencyRootModel):
                 readout_gstate_loss=readout_gstate_loss,
                 readout_loss=readout_loss,
                 readout_train_op=readout_train_op,
+                summary=summary,
                 name=self.name,
                 childs=childs)
             iprint("... done")
@@ -399,9 +412,9 @@ class AgencyCall(AgencyCallRoot):
                  predicted_return_1, predicted_return_target_1, predicted_return_2, predicted_return_target_2, predicted_return,
                  reward, critic_target, critic_1_loss, critic_2_loss, critic_loss, critic_train_op,
                  actor_loss, actor_train_op, update_target_weights_op, batchnorm_train_op,
-                 her_critic_loss_1, her_predicted_return_1, her_critic_loss_2, her_predicted_return_2, her_actor_loss, her_goal_0,
+                 her_critic_1_loss, her_predicted_return_1, her_critic_2_loss, her_predicted_return_2, her_actor_loss, her_goal_0,
                  readout_goal, readout_state, readout_gstate, readout_goal_loss, readout_state_loss, readout_gstate_loss,
-                 readout_loss, readout_train_op, name, childs=[]):
+                 readout_loss, readout_train_op, summary, name, childs=[]):
         super().__init__(name, childs=childs)
         self.goal_0 = goal_0
         self.goal_1 = goal_1
@@ -424,9 +437,9 @@ class AgencyCall(AgencyCallRoot):
         self.actor_train_op = actor_train_op
         self.update_target_weights_op = update_target_weights_op
         self.batchnorm_train_op = batchnorm_train_op
-        self.her_critic_loss_1 = her_critic_loss_1
+        self.her_critic_1_loss = her_critic_1_loss
         self.her_predicted_return_1 = her_predicted_return_1
-        self.her_critic_loss_2 = her_critic_loss_2
+        self.her_critic_2_loss = her_critic_2_loss
         self.her_predicted_return_2 = her_predicted_return_2
         self.her_actor_loss = her_actor_loss
         self.her_goal_0 = her_goal_0
@@ -438,6 +451,7 @@ class AgencyCall(AgencyCallRoot):
         self.readout_gstate_loss = readout_gstate_loss
         self.readout_loss = readout_loss
         self.readout_train_op = readout_train_op
+        self.summary = summary
 
     def set_root_train_ops(self, root_actor_train_op=None, root_critic_train_op=None, root_state_train_op=None):
         raise ValueError("This method can only be called on the root of the tree.")
