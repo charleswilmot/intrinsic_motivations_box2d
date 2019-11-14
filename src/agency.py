@@ -40,7 +40,9 @@ class MultiInputModel(layers.Layer):
         return super().__call__(args, **kwargs)
 
     def call(self, inputs, **kwargs):
-        return self.my_call(*inputs, **kwargs)
+        ret = self.my_call(*inputs, **kwargs)
+        self._set_trainable_weights()
+        return ret
 
 
 class DebugPolicyModel(MultiInputModel):
@@ -56,7 +58,7 @@ class DebugPolicyModel(MultiInputModel):
         ret = self.batchnorm(ret, training=training)
         return ret
 
-    def build(self, inputs):
+    def _set_trainable_weights(self):
         self._trainable_weights = self.dense.trainable_variables
 
 
@@ -68,7 +70,7 @@ class DebugStateModel(MultiInputModel):
     def my_call(self, state):
         return self.dense(state)
 
-    def build(self, inputs):
+    def _set_trainable_weights(self):
         self._trainable_weights = self.dense.trainable_variables
 
 
@@ -83,8 +85,78 @@ class DebugCriticModel(MultiInputModel):
         ret = self.dense(ret)
         return ret
 
-    def build(self, inputs):
+    def _set_trainable_weights(self):
         self._trainable_weights = self.dense.trainable_variables
+
+
+class SimplePolicyModel(MultiInputModel):
+    def __init__(self, l0_size, l1_size, l2_size, name="policy"):
+        super().__init__(name=name)
+        self.concat0 = layers.Concatenate()
+        self.concat1 = layers.Concatenate()
+        self.dense0 = layers.Dense(l0_size, activation=tf.nn.relu)
+        self.dense1 = layers.Dense(l1_size, activation=tf.nn.relu)
+        self.dense2 = layers.Dense(l2_size, activation=None)
+        self.batchnorm = tf.layers.BatchNormalization(scale=False, center=False)
+
+    def my_call(self, state, goal, training=True):
+        ret = self.concat0([state, goal])
+        ret = self.dense0(ret)
+        ret = self.concat1([state, goal, ret])
+        ret = self.dense1(ret)
+        ret = self.dense2(ret)
+        ret = self.batchnorm(ret, training=training)
+        return ret
+
+    def _set_trainable_weights(self):
+        self._trainable_weights = []
+        self._trainable_weights += self.dense0.trainable_variables
+        self._trainable_weights += self.dense1.trainable_variables
+        self._trainable_weights += self.dense2.trainable_variables
+
+
+class SimpleStateModel(MultiInputModel):
+    def __init__(self, l0_size, l1_size, l2_size, name="state"):
+        super().__init__(name=name)
+        self.dense0 = layers.Dense(l0_size, activation=tf.nn.relu)
+        self.dense1 = layers.Dense(l1_size, activation=tf.nn.relu)
+        self.dense2 = layers.Dense(l2_size, activation=tf.nn.relu)
+
+    def my_call(self, state):
+        ret = self.dense0(state)
+        ret = self.dense1(ret)
+        ret = self.dense2(ret)
+        return ret
+
+    def _set_trainable_weights(self):
+        self._trainable_weights = []
+        self._trainable_weights += self.dense0.trainable_variables
+        self._trainable_weights += self.dense1.trainable_variables
+        self._trainable_weights += self.dense2.trainable_variables
+
+
+class SimpleCriticModel(MultiInputModel):
+    def __init__(self, l0_size, l1_size, name="critic"):
+        super().__init__(name=name)
+        self.concat0 = layers.Concatenate()
+        self.concat1 = layers.Concatenate()
+        self.dense0 = layers.Dense(l0_size, activation=tf.nn.relu)
+        self.dense1 = layers.Dense(l1_size, activation=tf.nn.relu)
+        self.dense2 = layers.Dense(1, activation=None)
+
+    def my_call(self, state, goal, action):
+        ret = self.concat0([state, goal, action])
+        ret = self.dense0(ret)
+        ret = self.concat1([state, goal, action, ret])
+        ret = self.dense1(ret)
+        ret = self.dense2(ret)
+        return ret
+
+    def _set_trainable_weights(self):
+        self._trainable_weights = []
+        self._trainable_weights += self.dense0.trainable_variables
+        self._trainable_weights += self.dense1.trainable_variables
+        self._trainable_weights += self.dense2.trainable_variables
 
 
 class DebugReadoutModelBase(MultiInputModel):
@@ -99,7 +171,7 @@ class DebugReadoutModelBase(MultiInputModel):
         ret = self.dense2(ret)
         return ret
 
-    def build(self, inputs):
+    def _set_trainable_weights(self):
         self._trainable_weights = self.dense1.trainable_variables + self.dense2.trainable_variables
 
 
@@ -192,7 +264,13 @@ class AgencyRootModel(MultiInputModel):
             states_params = [item for sublist in states_params for item in sublist]
             state_loss = sum(ret.tree_map(lambda agency_call: agency_call.actor_loss, as_list=True))
             state_optimizer = tf.train.AdamOptimizer(learning_rate)
-            root_state_train_op = state_optimizer.minimize(state_loss, var_list=states_params)
+            try:
+                root_state_train_op = state_optimizer.minimize(state_loss, var_list=states_params)
+            except ValueError:
+                iprint("The gradient for the state representation could not be computed.\n"
+                       "This is a normal behaviour if the agency has a single agent.\n"
+                       "Setting the state train op to a tf.no_op!")
+                root_state_train_op = tf.no_op()
             ret.set_root_train_ops(
                 root_actor_train_op=root_actor_train_op,
                 root_critic_train_op=root_critic_train_op,
@@ -200,6 +278,10 @@ class AgencyRootModel(MultiInputModel):
             )
             iprint("... done")
         return ret
+
+    def _set_trainable_weights(self):
+        self._trainable_weights = self.tree_map(lambda agency: agency.trainable_variables, as_list=True)
+        self._trainable_weights = [item for sublist in self._trainable_weights for item in sublist]
 
     class _indented_print:
         def __enter__(self):
@@ -379,6 +461,16 @@ class AgencyModel(AgencyRootModel):
             return {self.name: func(self),
                     "childs" : [c.tree_map(func, False) for c in self.childs]}
 
+    def _set_trainable_weights(self):
+        self._trainable_weights = []
+        self._trainable_weights += self.critic_1_model.trainable_variables
+        self._trainable_weights += self.critic_2_model.trainable_variables
+        self._trainable_weights += self.target_critic_1_model.trainable_variables
+        self._trainable_weights += self.target_critic_2_model.trainable_variables
+        self._trainable_weights += self.policy_model.trainable_variables
+        self._trainable_weights += self.target_policy_model.trainable_variables
+        self._trainable_weights += self.state_model.trainable_variables
+
 
 class AgencyCallRoot:
     def __init__(self, name, childs=[]):
@@ -466,7 +558,9 @@ class AgencyCall(AgencyCallRoot):
 
 
 if __name__ == "__main__":
-    a = AgencyRootModel.from_conf("../agencies/debug_agency.txt")
+    a = AgencyRootModel.from_conf("../agencies/left_elbow_agency.txt")
+    # a = AgencyRootModel.from_conf("../agencies/simple_agency.txt")
+    # a = AgencyRootModel.from_conf("../agencies/debug_agency.txt")
 
     parent_goal_0 = tf.placeholder(shape=(None, 10), dtype=tf.float32)
     parent_state_0 = tf.placeholder(shape=(None, 10), dtype=tf.float32)

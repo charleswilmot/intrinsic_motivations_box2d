@@ -1,0 +1,15 @@
+{
+    "all_body": {
+        "childs": {
+            "left_elbow": {
+                "policy_model": "SimplePolicyModel(4, 4, 1)",
+                "state_model": "SimpleStateModel(10, 10, 1)",
+                "critic_model": "SimpleCriticModel(15, 15)",
+                "readout_goal_model": "DebugReadoutGoalModel()",
+                "readout_state_model": "DebugReadoutStateModel()",
+                "readout_gstate_model": "DebugReadoutGStateModel()",
+                "childs": {}
+            }
+        }
+    }
+}
