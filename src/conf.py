@@ -20,50 +20,38 @@ class ConfRoot:
 
 
 class WorkerConf(ConfRoot):
-    def __init__(self, discount_factor, sequence_length, critic_learning_rate, epsilon_init, epsilon_decay,
-                       buffer_size, updates_per_episode, batch_size, her_strategy, n_actions, parametrization_type):
+    def __init__(self, discount_factor, sequence_length, learning_rate,
+                       buffer_size, updates_per_episode, batch_size,
+                       tau, behaviour_noise_scale, target_smoothing_noise_scale,
+                       goal_buffer_size, goal_buffer_keep_percent,
+                       agency_conf_path):
         self.discount_factor = discount_factor
         self.sequence_length = sequence_length
-        self.critic_learning_rate = critic_learning_rate
-        self.epsilon_init = epsilon_init
-        self.epsilon_decay = epsilon_decay
+        self.learning_rate = learning_rate
         self.buffer_size = buffer_size
         self.updates_per_episode = updates_per_episode
         self.batch_size = batch_size
-        self.her_strategy = her_strategy
-        self.n_actions = n_actions
-        self.parametrization_type = parametrization_type
+        self.tau = tau
+        self.behaviour_noise_scale = behaviour_noise_scale
+        self.target_smoothing_noise_scale = target_smoothing_noise_scale
+        self.goal_buffer_size = goal_buffer_size
+        self.goal_buffer_keep_percent = goal_buffer_keep_percent
+        self.agency_conf_path = agency_conf_path
 
     @staticmethod
     def from_args(args):
         return WorkerConf(args.discount_factor,
                           args.sequence_length,
-                          args.critic_learning_rate,
-                          args.epsilon_init,
-                          args.epsilon_decay,
+                          args.learning_rate,
                           args.buffer_size,
                           args.updates_per_episode,
                           args.batch_size,
-                          args.her_strategy,
-                          args.n_actions,
-                          args.parametrization_type)
-
-
-class GoalLibraryConf(ConfRoot):
-    def __init__(self, softmax_temperature, min_reaching_prob, goal_library_size, ema_speed, goal_sampling_type):
-        self.softmax_temperature = softmax_temperature
-        self.min_reaching_prob = min_reaching_prob
-        self.goal_library_size = goal_library_size
-        self.ema_speed = ema_speed
-        self.goal_sampling_type = goal_sampling_type
-
-    @staticmethod
-    def from_args(args):
-        return GoalLibraryConf(args.softmax_temperature,
-                               args.min_reaching_prob,
-                               args.goal_library_size,
-                               args.ema_speed,
-                               args.goal_sampling_type)
+                          args.tau,
+                          args.behaviour_noise_scale,
+                          args.target_smoothing_noise_scale,
+                          args.goal_buffer_size,
+                          args.goal_buffer_keep_percent,
+                          args.agency_conf_path)
 
 
 class EnvironmentConf(ConfRoot):
@@ -92,17 +80,15 @@ class EnvironmentConf(ConfRoot):
 
 
 class Conf(ConfRoot):
-    def __init__(self, worker_conf, goal_library_conf, environment_conf):
+    def __init__(self, worker_conf, environment_conf):
         self.worker_conf = worker_conf
-        self.goal_library_conf = goal_library_conf
         self.environment_conf = environment_conf
 
     @staticmethod
     def from_args(args):
         worker_conf = WorkerConf.from_args(args)
-        goal_library_conf = GoalLibraryConf.from_args(args)
         environment_conf = EnvironmentConf.from_args(args)
-        return Conf(worker_conf, goal_library_conf, environment_conf)
+        return Conf(worker_conf, environment_conf)
 
 
 if __name__ == "__main__":

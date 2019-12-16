@@ -70,6 +70,7 @@ class Environment(object):
         self._computed_tactile = False
         self._computed_positions = False
         self._computed_discrete_positions = False
+        self._computed_sincos_positions = False
         self._computed_speeds = False
         self._computed_discrete_speeds = False
         self._computed_target_positions = False
@@ -188,6 +189,7 @@ class Environment(object):
         self._computed_tactile = False
         self._computed_positions = False
         self._computed_discrete_positions = False
+        self._computed_sincos_positions = False
         self._computed_speeds = False
         self._computed_discrete_speeds = False
         self._computed_target_positions = False
@@ -242,6 +244,14 @@ class Environment(object):
             self._computed_discrete_positions = True
             return self._buf_discrete_positions
 
+    def _get_state_sincos_positions(self):
+        if self._computed_sincos_positions:
+            return self._buf_sincos_positions
+        else:
+            self._buf_sincos_positions = np.concatenate([np.sin(self.positions), np.cos(self.positions)])
+            self._computed_sincos_positions = True
+            return self._buf_sincos_positions
+
     def _get_state_speeds(self):
         if self._computed_speeds:
             return self._buf_speeds
@@ -280,6 +290,7 @@ class Environment(object):
     state = property(_get_state)
     positions = property(_get_state_positions)
     discrete_positions = property(_get_state_discrete_positions)
+    sincos_positions = property(_get_state_sincos_positions)
     speeds = property(_get_state_speeds)
     discrete_speeds = property(_get_state_discrete_speeds)
     target_positions = property(_get_state_target_positions)

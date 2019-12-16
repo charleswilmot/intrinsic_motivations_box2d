@@ -177,17 +177,17 @@ class DebugReadoutModelBase(MultiInputModel):
 
 class DebugReadoutGoalModel(DebugReadoutModelBase):
     def __init__(self):
-        super().__init__(10, "readout_goal")
+        super().__init__(8, "readout_goal")
 
 
 class DebugReadoutStateModel(DebugReadoutModelBase):
     def __init__(self):
-        super().__init__(10, "readout_state")
+        super().__init__(12, "readout_state")
 
 
 class DebugReadoutGStateModel(DebugReadoutModelBase):
     def __init__(self):
-        super().__init__(10, "readout_gstate")
+        super().__init__(8, "readout_gstate")
 
 
 class AgencyRootModel(MultiInputModel):
@@ -241,9 +241,10 @@ class AgencyRootModel(MultiInputModel):
     def my_call(self, parent_goal_0, parent_state_0, parent_gstate_0,
                       parent_goal_1, parent_state_1, parent_gstate_1,
                       learning_rate=None, discount_factor=None, tau=None,
-                      behaviour_noise_scale=None, target_smoothing_noise_scale=None):
+                      behaviour_noise_scale=None, target_smoothing_noise_scale=None,
+                      batchnorm_training=True):
         with self._indented_print() as iprint:
-            iprint("calling {} (ROOT)".format(self.name))
+            # iprint("calling {} (ROOT)".format(self.name))
             ### CALL SUB-AGENTS
             childs = [child(
                         parent_goal_0, parent_state_0, parent_gstate_0,
@@ -251,7 +252,8 @@ class AgencyRootModel(MultiInputModel):
                         parent_goal_0, parent_state_0, parent_gstate_0,
                         learning_rate=learning_rate, discount_factor=discount_factor, tau=tau,
                         behaviour_noise_scale=behaviour_noise_scale,
-                        target_smoothing_noise_scale=target_smoothing_noise_scale)
+                        target_smoothing_noise_scale=target_smoothing_noise_scale,
+                        batchnorm_training=batchnorm_training)
                      for child in self.childs]
             ###### OPERATION OVER ENTIRE TREE
             ret = AgencyCallRoot(name=self.name, childs=childs)
@@ -259,6 +261,8 @@ class AgencyRootModel(MultiInputModel):
             root_actor_train_op = tf.group(ret.tree_map(lambda agency_call: agency_call.actor_train_op, as_list=True))
             ### CRITIC
             root_critic_train_op = tf.group(ret.tree_map(lambda agency_call: agency_call.critic_train_op, as_list=True))
+            ### TARGETS
+            root_update_target_train_op = tf.group(ret.tree_map(lambda agency_call: agency_call.update_target_weights_op, as_list=True))
             ### STATE
             states_params = self.tree_map(lambda agency: agency.state_model.trainable_variables, as_list=True)
             states_params = [item for sublist in states_params for item in sublist]
@@ -271,12 +275,20 @@ class AgencyRootModel(MultiInputModel):
                        "This is a normal behaviour if the agency has a single agent.\n"
                        "Setting the state train op to a tf.no_op!")
                 root_state_train_op = tf.no_op()
-            ret.set_root_train_ops(
+            ### READOUT
+            root_readout_train_op = tf.group(ret.tree_map(lambda agency_call: agency_call.readout_train_op, as_list=True))
+            ### SUMMARIES
+            root_summary_op = tf.summary.merge(ret.tree_map(lambda agency_call: agency_call.summary, as_list=True))
+            ### SET
+            ret.set_root_ops(
                 root_actor_train_op=root_actor_train_op,
                 root_critic_train_op=root_critic_train_op,
-                root_state_train_op=root_state_train_op
+                root_state_train_op=root_state_train_op,
+                root_update_target_train_op=root_update_target_train_op,
+                root_readout_train_op=root_readout_train_op,
+                root_summary_op=root_summary_op
             )
-            iprint("... done")
+            # iprint("... done")
         return ret
 
     def _set_trainable_weights(self):
@@ -327,21 +339,27 @@ class AgencyModel(AgencyRootModel):
             # tgstate_0 = self.target_policy_model(parent_state_0, parent_gstate_0) #### warning!! what should be passed to childs?? target or not??
             # tgstate_1 = self.target_policy_model(parent_state_1, parent_gstate_1)
             # reward = d(tgoal_0, tgstate_0) - d(tgoal_0, tgstate_1)
-            iprint("calling {}".format(self.name))
+            # iprint("calling {}".format(self.name))
             ### GOAL
             goal_0 = self.policy_model(parent_state_0, tf.stop_gradient(parent_goal_0), training=batchnorm_training)
             if behaviour_noise_scale:
                 goal_0 += tf.random_normal(shape=tf.shape(goal_0), stddev=behaviour_noise_scale)
             goal_1 = self.target_policy_model(parent_state_1, tf.stop_gradient(parent_goal_0), training=batchnorm_training)
+            goal_0_placeholder = tf.placeholder_with_default(goal_0, shape=goal_0.get_shape())
+            goal_1_placeholder = tf.placeholder_with_default(goal_1, shape=goal_1.get_shape())
             if target_smoothing_noise_scale:
                 goal_1 += tf.truncated_normal(shape=tf.shape(goal_1), stddev=target_smoothing_noise_scale)
             her_goal_0 = self.policy_model(parent_state_0, tf.stop_gradient(parent_gstate_1), training=batchnorm_training)
             ### STATE
             state_0 = self.state_model(parent_state_0)
             state_1 = self.state_model(parent_state_1)
+            state_0_placeholder = tf.placeholder_with_default(state_0, shape=state_0.get_shape())
+            state_1_placeholder = tf.placeholder_with_default(state_1, shape=state_1.get_shape())
             ### STATE IN GOAL SPACE
             gstate_0 = self.policy_model(parent_state_0, parent_gstate_0, training=batchnorm_training)
             gstate_1 = self.policy_model(parent_state_1, parent_gstate_1, training=batchnorm_training)
+            gstate_0_placeholder = tf.placeholder_with_default(gstate_0, shape=gstate_0.get_shape())
+            gstate_1_placeholder = tf.placeholder_with_default(gstate_1, shape=gstate_1.get_shape())
             ### PREDICTED RETURN
             predicted_return_1 = self.critic_1_model(tf.stop_gradient(parent_state_0), tf.stop_gradient(parent_goal_0), goal_0)
             predicted_return_target_1 = self.target_critic_1_model(parent_state_1, parent_goal_0, goal_1)
@@ -351,13 +369,14 @@ class AgencyModel(AgencyRootModel):
             her_predicted_return_1 = self.critic_1_model(tf.stop_gradient(parent_state_0), tf.stop_gradient(parent_gstate_1), goal_0)
             her_predicted_return_2 = self.critic_2_model(tf.stop_gradient(parent_state_0), tf.stop_gradient(parent_gstate_1), goal_0)
             ### CRITIC
-            reward = d(goal_0, gstate_0) - d(goal_0, gstate_1)
+            reward = d(parent_goal_0, parent_gstate_0) - d(parent_goal_0, parent_gstate_1)
             critic_target = reward + discount_factor * predicted_return
             critic_1_loss = (predicted_return_1 - tf.stop_gradient(critic_target)) ** 2
             critic_2_loss = (predicted_return_2 - tf.stop_gradient(critic_target)) ** 2
             her_critic_1_loss = (her_predicted_return_1 - tf.stop_gradient(d(parent_state_0, parent_state_1))) ** 2
             her_critic_2_loss = (her_predicted_return_2 - tf.stop_gradient(d(parent_state_0, parent_state_1))) ** 2
-            critic_loss = critic_1_loss + critic_2_loss + her_critic_1_loss + her_critic_2_loss
+            critic_loss = critic_1_loss + critic_2_loss
+            # critic_loss += her_critic_1_loss + her_critic_2_loss  # comment out to remove HER
             critic_optimizer = tf.train.AdamOptimizer(learning_rate)
             critic_train_op = critic_optimizer.minimize(
                 critic_loss,
@@ -365,7 +384,7 @@ class AgencyModel(AgencyRootModel):
             ### ACTOR
             actor_loss = -predicted_return_1
             her_actor_loss = (her_goal_0 - tf.stop_gradient(goal_0)) ** 2
-            actor_loss += her_actor_loss
+            # actor_loss += her_actor_loss  # comment out to remove HER
             actor_optimizer = tf.train.AdamOptimizer(learning_rate)
             actor_train_op = actor_optimizer.minimize(actor_loss, var_list=self.policy_model.trainable_variables)
             batchnorm_train_op = self.policy_model.batchnorm.updates + self.target_policy_model.batchnorm.updates
@@ -392,17 +411,19 @@ class AgencyModel(AgencyRootModel):
             readout_optimizer = tf.train.AdamOptimizer(learning_rate)
             readout_train_op = readout_optimizer.minimize(readout_loss)
             ### SUMMARIES
-            mean_actor_loss_summary = tf.summary.scalar("/{}/mean_actor_loss".format(self.name), tf.reduce_mean(actor_loss))
-            mean_her_actor_loss_summary = tf.summary.scalar("/{}/mean_her_actor_loss".format(self.name), tf.reduce_mean(her_actor_loss))
-            mean_critic_1_loss_summary = tf.summary.scalar("/{}/mean_critic_1_loss".format(self.name), tf.reduce_mean(critic_1_loss))
-            mean_critic_2_loss_summary = tf.summary.scalar("/{}/mean_critic_2_loss".format(self.name), tf.reduce_mean(critic_2_loss))
-            mean_her_critic_1_loss_summary = tf.summary.scalar("/{}/mean_her_critic_1_loss".format(self.name), tf.reduce_mean(her_critic_1_loss))
-            mean_her_critic_2_loss_summary = tf.summary.scalar("/{}/mean_her_critic_2_loss".format(self.name), tf.reduce_mean(her_critic_2_loss))
-            mean_reward_summary = tf.summary.scalar("/{}/mean_reward".format(self.name), tf.reduce_mean(reward))
-            summary = tf.summary.merge([
-                mean_actor_loss_summary, mean_her_actor_loss_summary, mean_critic_1_loss_summary,
-                mean_critic_2_loss_summary, mean_her_critic_1_loss_summary, mean_her_critic_2_loss_summary,
-                mean_reward_summary])
+            with tf.name_scope(""):
+                mean_actor_loss_summary = tf.summary.scalar("/mean_actor_loss/{}".format(self.name), tf.reduce_mean(actor_loss))
+                mean_her_actor_loss_summary = tf.summary.scalar("/mean_her_actor_loss/{}".format(self.name), tf.reduce_mean(her_actor_loss))
+                mean_critic_1_loss_summary = tf.summary.scalar("/mean_critic_1_loss/{}".format(self.name), tf.reduce_mean(critic_1_loss))
+                mean_critic_2_loss_summary = tf.summary.scalar("/mean_critic_2_loss/{}".format(self.name), tf.reduce_mean(critic_2_loss))
+                mean_her_critic_1_loss_summary = tf.summary.scalar("/mean_her_critic_1_loss/{}".format(self.name), tf.reduce_mean(her_critic_1_loss))
+                mean_her_critic_2_loss_summary = tf.summary.scalar("/mean_her_critic_2_loss/{}".format(self.name), tf.reduce_mean(her_critic_2_loss))
+                mean_reward_summary = tf.summary.scalar("/mean_reward/{}".format(self.name), tf.reduce_mean(reward))
+                summary = tf.summary.merge([
+                    mean_actor_loss_summary, mean_her_actor_loss_summary,
+                    mean_critic_1_loss_summary, mean_her_critic_1_loss_summary,
+                    mean_critic_2_loss_summary, mean_her_critic_2_loss_summary,
+                    mean_reward_summary])
             ### CALL SUB-AGENTS
             childs = [child(
                         goal_0, state_0, gstate_0,
@@ -415,10 +436,16 @@ class AgencyModel(AgencyRootModel):
             ret = AgencyCall(
                 goal_0=goal_0,
                 goal_1=goal_1,
+                goal_0_placeholder=goal_0_placeholder,
+                goal_1_placeholder=goal_1_placeholder,
                 state_0=state_0,
                 state_1=state_1,
+                state_0_placeholder=state_0_placeholder,
+                state_1_placeholder=state_1_placeholder,
                 gstate_0=gstate_0,
                 gstate_1=gstate_1,
+                gstate_0_placeholder=gstate_0_placeholder,
+                gstate_1_placeholder=gstate_1_placeholder,
                 predicted_return_1=predicted_return_1,
                 predicted_return_target_1=predicted_return_target_1,
                 predicted_return_2=predicted_return_2,
@@ -451,7 +478,7 @@ class AgencyModel(AgencyRootModel):
                 summary=summary,
                 name=self.name,
                 childs=childs)
-            iprint("... done")
+            # iprint("... done")
         return ret
 
     def tree_map(self, func, as_list=False):
@@ -484,10 +511,19 @@ class AgencyCallRoot:
             return self.childs[args[0]]
         return self.childs[args[0]][args[1:]]
 
-    def set_root_train_ops(self, root_actor_train_op=None, root_critic_train_op=None, root_state_train_op=None):
+    def set_root_ops(self,
+            root_actor_train_op,
+            root_critic_train_op,
+            root_state_train_op,
+            root_update_target_train_op,
+            root_readout_train_op,
+            root_summary_op):
         self.root_actor_train_op = root_actor_train_op
         self.root_critic_train_op = root_critic_train_op
         self.root_state_train_op = root_state_train_op
+        self.root_update_target_train_op = root_update_target_train_op
+        self.root_readout_train_op = root_readout_train_op
+        self.root_summary_op = root_summary_op
 
     def tree_map(self, func, as_list=False, exclude_root=True):
         if as_list:
@@ -500,7 +536,9 @@ class AgencyCallRoot:
 
 class AgencyCall(AgencyCallRoot):
     def __init__(self,
-                 goal_0, goal_1, state_0, state_1, gstate_0, gstate_1,
+                 goal_0, goal_1, goal_0_placeholder, goal_1_placeholder,
+                 state_0, state_1, state_0_placeholder, state_1_placeholder,
+                 gstate_0, gstate_1, gstate_0_placeholder, gstate_1_placeholder,
                  predicted_return_1, predicted_return_target_1, predicted_return_2, predicted_return_target_2, predicted_return,
                  reward, critic_target, critic_1_loss, critic_2_loss, critic_loss, critic_train_op,
                  actor_loss, actor_train_op, update_target_weights_op, batchnorm_train_op,
@@ -510,10 +548,16 @@ class AgencyCall(AgencyCallRoot):
         super().__init__(name, childs=childs)
         self.goal_0 = goal_0
         self.goal_1 = goal_1
+        self.goal_0_placeholder = goal_0_placeholder
+        self.goal_1_placeholder = goal_1_placeholder
         self.state_0 = state_0
         self.state_1 = state_1
+        self.state_0_placeholder = state_0_placeholder
+        self.state_1_placeholder = state_1_placeholder
         self.gstate_0 = gstate_0
         self.gstate_1 = gstate_1
+        self.gstate_0_placeholder = gstate_0_placeholder
+        self.gstate_1_placeholder = gstate_1_placeholder
         self.predicted_return_1 = predicted_return_1
         self.predicted_return_target_1 = predicted_return_target_1
         self.predicted_return_2 = predicted_return_2
@@ -545,7 +589,7 @@ class AgencyCall(AgencyCallRoot):
         self.readout_train_op = readout_train_op
         self.summary = summary
 
-    def set_root_train_ops(self, root_actor_train_op=None, root_critic_train_op=None, root_state_train_op=None):
+    def set_root_ops(self, *args, **kwargs):
         raise ValueError("This method can only be called on the root of the tree.")
 
     def tree_map(self, func, as_list=False):
@@ -558,8 +602,8 @@ class AgencyCall(AgencyCallRoot):
 
 
 if __name__ == "__main__":
-    a = AgencyRootModel.from_conf("../agencies/left_elbow_agency.txt")
-    # a = AgencyRootModel.from_conf("../agencies/simple_agency.txt")
+    # a = AgencyRootModel.from_conf("../agencies/left_elbow_agency.txt")
+    a = AgencyRootModel.from_conf("../agencies/simple_agency.txt")
     # a = AgencyRootModel.from_conf("../agencies/debug_agency.txt")
 
     parent_goal_0 = tf.placeholder(shape=(None, 10), dtype=tf.float32)

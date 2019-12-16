@@ -5,8 +5,7 @@ from asynchronous import Experiment
 import pickle
 
 
-default_clr = 1e-4
-default_epsilon = 0.05
+default_lr = 1e-4
 default_discount_factor = 0.9
 
 
@@ -14,14 +13,13 @@ def bool_helper(thing):
     return thing in ["True", "true", 1, "1"]
 
 
-def make_experiment_path(date=None, clr=None, epsilon=None, discount_factor=None, description=None):
+def make_experiment_path(date=None, lr=None, discount_factor=None, description=None):
     date = date if date else time.strftime("%Y_%m_%d-%H.%M.%S", time.localtime())
-    clr = clr if clr else default_clr
-    epsilon = epsilon if epsilon else default_epsilon
+    lr = lr if lr else default_lr
     discount_factor = discount_factor if discount_factor else default_discount_factor
     description = ("__" + description) if description else ""
-    experiment_dir = "../experiments/{}_clr{:.2e}_epsilon{:.2e}_discount_factor{:.2e}{}".format(
-        date, clr, epsilon, discount_factor, description)
+    experiment_dir = "../experiments/{}_lr{:.2e}_discount_factor{:.2e}{}".format(
+        date, lr, discount_factor, description)
     return experiment_dir
 
 
@@ -101,10 +99,10 @@ if __name__ == "__main__":
         help="Checkpoint to restore from."
     )
     parser.add_argument(
-        '-clr', '--critic-learning-rate',
+        '-lr', '--learning-rate',
         type=float,
-        default=default_clr,
-        help="critic learning rate."
+        default=default_lr,
+        help="learning rate."
     )
     parser.add_argument(
         '-df', '--discount-factor',
@@ -113,70 +111,10 @@ if __name__ == "__main__":
         help="Discount factor."
     )
     parser.add_argument(
-        '-st', '--softmax-temperature',
-        type=float,
-        default=1.0,
-        help="Temperature of the softmax sampling."
-    )
-    parser.add_argument(
-        '-her', '--her-strategy',
-        type=str,
-        default="all_contacts",
-        help="Strategy for the HER."
-    )
-    parser.add_argument(
-        '-pt', '--parametrization-type',
-        type=str,
-        default="none",
-        help="Parametrization type. ('none', 'concat' or 'affine', case independent)"
-    )
-    parser.add_argument(
         '-bs', '--buffer-size',
         type=int,
-        default=100,
-        help="Number of trajectories that can be stored in the replay buffer."
-    )
-    parser.add_argument(
-        '-ema', '--ema-speed',
-        type=float,
-        default=0.99999,
-        help="Exponential moving average speed for the goal library (goal library)."
-    )
-    parser.add_argument(
-        '-mrp', '--min-reaching-prob',
-        type=float,
-        default=0.0005,
-        help="Minimum probability of reaching when the goal is not in pursued for a goal to be sampled."
-    )
-    parser.add_argument(
-        '-gls', '--goal-library-size',
-        type=int,
-        default=100,
-        help="Number of goals in the library."
-    )
-    parser.add_argument(
-        '-gst', '--goal-sampling-type',
-        type=str,
-        default="uniform",
-        help="Type of sampling in the goal library."
-    )
-    parser.add_argument(
-        '-ei', '--epsilon-init',
-        type=float,
-        default=default_epsilon,
-        help="Initialization for the sampling rate."
-    )
-    parser.add_argument(
-        '-ed', '--epsilon-decay',
-        type=float,
-        default=1.0,
-        help="Decay for the sampling rate."
-    )
-    parser.add_argument(
-        '-na', '--n-actions',
-        type=int,
-        default=11,
-        help="Number of actions in the action set."
+        default=1000,
+        help="Number of transitions that can be stored in the replay buffer."
     )
     parser.add_argument(
         '-jm', '--json-model',
@@ -238,13 +176,49 @@ if __name__ == "__main__":
         default=True,
         help="Should generate videos?"
     )
+    parser.add_argument(
+        '-tau', '--tau',
+        type=float,
+        default=0.05,
+        help="Target update rate."
+    )
+    parser.add_argument(
+        '-bns', '--behaviour-noise-scale',
+        type=float,
+        default=0.05,
+        help="Time resolution of the simulation."
+    )
+    parser.add_argument(
+        '-tsns', '--target-smoothing-noise-scale',
+        type=float,
+        default=0.005,
+        help="Time resolution of the simulation."
+    )
+    parser.add_argument(
+        '-gbf', '--goal_buffer-size',
+        type=int,
+        default=500,
+        help="Size of the buffer from which goals are sampled."
+    )
+    parser.add_argument(
+        '-gbkp', '--goal-buffer-keep-percent',
+        type=float,
+        default=0.2,
+        help="Percentage of observed goals kept for sampling."
+    )
+    parser.add_argument(
+        '-a', '--agency-conf-path',
+        type=str,
+        default="../agencies/simple_agency.txt",
+        help="Path to the agency conf file."
+    )
+
     args = parser.parse_args()
 
     if not args.experiment_path:
         args.experiment_path = make_experiment_path(
-            clr=args.critic_learning_rate,
-            alr=args.actor_learning_rate,
-            er=args.entropy_reg,
+            lr=args.learning_rate,
+            discount_factor=args.discount_factor,
             description=args.description)
 
     conf = Conf.from_args(args)
@@ -252,7 +226,6 @@ if __name__ == "__main__":
     with Experiment(args.n_parameter_servers, args.n_workers, args.experiment_path, conf, display_dpi=3) as experiment:
         if args.restore_from:
             experiment.restore_model(args.restore_from)
-            experiment.restore_goal_library(args.restore_from + "/../../goals/dumps/worker_0.pkl")
         if args.display:
             experiment.start_display_worker(training=True)
         if args.tensorboard:
@@ -260,15 +233,8 @@ if __name__ == "__main__":
         experiment.randomize_env(n=100)
         for i in range(args.n_trajectories // args.flush_every):
             experiment.asynchronously_train(args.flush_every)
-            experiment.take_goal_library_snapshot()
-            if (i + 1) % 10 == 0:
-                experiment.print_goal_library()
-                experiment.dump_goal_library()
             if (i + 1) % 100 == 0:
                 experiment.save_model()
-        experiment.take_goal_library_snapshot()
-        experiment.print_goal_library()
-        experiment.dump_goal_library()
         if args.video:
             experiment.save_video("final")
             experiment.save_video_all_goals("bragging", n_frames=150)
