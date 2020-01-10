@@ -105,6 +105,7 @@ class ReturnWidget(pg.PlotWidget):
         self._x = np.arange(-lookback + 1, 1)
         self._return_buffer = np.zeros(lookback)
         self._prediction_buffer = np.zeros(lookback)
+        self._target_buffer = np.zeros(lookback)
         self._prediction_part = np.zeros(lookback)
         self._gammas = np.cumprod(np.full(lookback, discount_factor))[::-1] / discount_factor
         self._discount_factor = discount_factor
@@ -113,17 +114,21 @@ class ReturnWidget(pg.PlotWidget):
         self.setLabel('bottom', 'iterations')
         self._return_curve = self.plot(pen=pg.mkPen(255, 255, 0))
         self._prediction_curve = self.plot(pen=pg.mkPen(51, 153, 255))
+        self._target_curve = self.plot(pen=pg.mkPen(126, 247, 130))
 
-    def refresh_data(self, reward, prediction):
+    def refresh_data(self, reward, prediction, target):
         self._prediction_buffer[:-1] = self._prediction_buffer[1:]
         self._prediction_buffer[-1] = prediction
-        self._return_buffer += self._gammas * reward - self._prediction_part
+        self._target_buffer[:-1] = self._target_buffer[1:]
+        self._target_buffer[-1] = target
         self._return_buffer[:-1] = self._return_buffer[1:]
+        self._return_buffer += self._gammas * reward - self._prediction_part
         self._prediction_part = prediction * self._gammas
-        self._return_buffer += self._prediction_part
-        self._return_buffer[-1] = prediction
+        self._return_buffer[-1] = reward
+        self._return_buffer += self._discount_factor * self._prediction_part
         self._return_curve.setData(x=self._x, y=self._return_buffer)
         self._prediction_curve.setData(x=self._x, y=self._prediction_buffer)
+        self._target_curve.setData(x=self._x, y=self._target_buffer)
 
 
 class RewardReturnWidget(QtGui.QWidget):
@@ -138,27 +143,29 @@ class RewardReturnWidget(QtGui.QWidget):
         self._layout.setMargin(0)
         self.setLayout(self._layout)
 
-    def refresh_data(self, reward, predicted_return):
+    def refresh_data(self, reward, predicted_return, target):
         self._reward.refresh_data(reward)
-        self._return.refresh_data(reward, predicted_return)
+        self._return.refresh_data(reward, predicted_return, target)
 
 
 class NonLeafAgentWidget(QtGui.QWidget):
-    def __init__(self, discount_factor, parent=None):
+    def __init__(self, name, discount_factor, parent=None):
         super().__init__(parent=parent)
         N = 2
+        self._name_widget = QtGui.QLabel(name)
         self._rwidget = RewardReturnWidget(discount_factor, parent=self)
         self._readouts = [ThreeReadoutsWidget(parent=self) for i in range(N)]
         self._layout = QtGui.QGridLayout(self)
-        self._layout.addWidget(self._rwidget, 0, 0, 1, N)
+        self._layout.addWidget(self._name_widget, 0, 0, 1, N)
+        self._layout.addWidget(self._rwidget, 1, 0, 1, N)
         for i, readout in enumerate(self._readouts):
-            self._layout.addWidget(readout, 1, i, 3, 1)
+            self._layout.addWidget(readout, 2, i, 3, 1)
         self._layout.setSpacing(0)
         self._layout.setMargin(0)
         self.setLayout(self._layout)
 
-    def refresh_data(self, reward, predicted_return, states, goals, gstates):
-        self._rwidget.refresh_data(reward, predicted_return)
+    def refresh_data(self, reward, predicted_return, target, states, goals, gstates):
+        self._rwidget.refresh_data(reward, predicted_return, target)
         for readout, state, goal, gstate in zip(self._readouts, states, goals, gstates):
             readout.refresh_data(state, goal, gstate)
 
@@ -182,7 +189,8 @@ class Window(QtGui.QMainWindow):
     def _create_agents_widget(self, dummy_transition, discount_factor):
         if not len(dummy_transition["childs"]):
             return []
-        return [NonLeafAgentWidget(discount_factor, parent=self._central_widget)] + \
+        name = [key for key in dummy_transition if key != "childs"][0]
+        return [NonLeafAgentWidget(name, discount_factor, parent=self._central_widget)] + \
                 sum([self._create_agents_widget(t, discount_factor)
                     for t in dummy_transition["childs"]], [])
 
@@ -195,10 +203,11 @@ class Window(QtGui.QMainWindow):
         one_child = one_child[name]
         reward = one_child["reward"][0]
         predicted_return = one_child["predicted_return"][0]
+        target = one_child["critic_target"][0]
         states = [child[name]["readout_state"][0] for name, child in zip(childs_names, transition["childs"])]
         goals = [child[name]["readout_goal"][0] for name, child in zip(childs_names, transition["childs"])]
         gstates = [child[name]["readout_gstate"][0] for name, child in zip(childs_names, transition["childs"])]
-        agents[0].refresh_data(reward, predicted_return, states, goals, gstates)
+        agents[0].refresh_data(reward, predicted_return, target, states, goals, gstates)
         agents = agents[1:]
         for t in transition["childs"]:
             agents = self._refresh_agents(t, agents)
@@ -218,6 +227,7 @@ class Display:
         self.worker = worker
         self._count = 1
         self._sequence_length = worker.sequence_length
+        self._training = training
         self.goal = self.worker.get_goal()
         self.state_0 = self.worker.get_state()
         self.gstate_0 = self.worker.get_gstate()
@@ -255,6 +265,17 @@ class Display:
             # register goals
             self.worker.goals_buffer.register(self.to_goal_buffer)
             self.to_goal_buffer.clear()
+            self.state_0 = self.worker.get_state()
+            self.gstate_0 = self.worker.get_gstate()
+            self.behaviour_fetches = self.worker.display_training_behaviour_fetches if self._training else self.worker.display_testing_behaviour_fetches
+            feed_dict = self.worker.behaviour_feed_dict(self.goal, self.state_0, self.gstate_0)
+            # feed_dict feeds root with data from 'state', 'gstate' and 'goal'
+            transition_0 = self.worker.sess.run(self.worker.training_behaviour_fetches, feed_dict=feed_dict)
+            # set action
+            action = self.worker.to_action(transition_0)
+            self.worker.env.set_speeds(action)
+            # run environment step
+            self.worker.env.env_step()
         # get states
         self.state_1 = self.worker.get_state()
         self.gstate_1 = self.worker.get_gstate()
