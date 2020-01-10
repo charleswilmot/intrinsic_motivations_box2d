@@ -23,6 +23,7 @@ wheels/
 data/
 tmp/
 experiments/
+grouped_events_files/
 *.egg-info/
 .installed.cfg
 *.egg
