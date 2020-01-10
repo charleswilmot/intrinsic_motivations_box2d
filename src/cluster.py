@@ -4,14 +4,13 @@ from training import make_experiment_path
 import os
 
 
-MEM_PER_WORKER = 900
+MEM_PER_WORKER = 1890
 MEM_BASELINE = 1000
 
 class ClusterQueue:
     def __init__(self, **kwargs):
         self.experiment_path = make_experiment_path(
-            clr=kwargs["critic_learning_rate"] if "critic_learning_rate" in kwargs else None,
-            epsilon=kwargs["epsilon_init"] if "epsilon_init" in kwargs else None,
+            lr=kwargs["learning_rate"] if "learning_rate" in kwargs else None,
             discount_factor=kwargs["discount_factor"] if "discount_factor" in kwargs else None,
             description=kwargs["description"])
         os.mkdir(self.experiment_path)
@@ -20,7 +19,7 @@ class ClusterQueue:
         if "description" in kwargs:
             self.cmd_slurm += " --job-name {}".format(kwargs["description"])
         n_workers = kwargs["n_workers"] if "n_workers" in kwargs else 4
-        self.cmd_slurm += " --mincpus {}".format(int(n_workers / 2))
+        self.cmd_slurm += " --mincpus {}".format(n_workers)
         self.cmd_slurm += " --mem {}".format(n_workers * MEM_PER_WORKER + MEM_BASELINE)
         self.cmd_slurm += " cluster.sh"
         self.cmd_python = ""
@@ -45,17 +44,42 @@ class ClusterQueue:
         os.system("watch tail -n 40 \"{}\"".format(self.experiment_path + "/log/*.log"))
 
 
-cq = ClusterQueue(
-    description="concat_1e-4_4nets_her_first_batch_10_updates_10_big_net",
-    discount_factor=0.5,
-    n_workers=64,
-    sequence_length=50,
-    n_actions=11,
-    flush_every=2000,
-    n_trajectories=2000000,
-    critic_learning_rate=1e-4,
-    her_strategy="first",
-    updates_per_episode=10,
-    batch_size=10,
-    skin_resolution=10,
-    parametrization_type="concat")
+# cq = ClusterQueue(
+#     description="checkpoint",
+#     video=False,
+#     discount_factor=0.0001,
+#     n_workers=1,
+#     n_trajectories=100,
+#     learning_rate=0,
+#     batch_size=256,
+#     buffer_size=1024,
+#     behaviour_noise_scale=0.025,
+#     target_smoothing_noise_scale=0.005,
+#     goal_buffer_size=1000,
+#     tau=0.05,
+#     save_every=100,
+#     updates_per_episode=1)
+
+for df in [0.001, 0.6]:
+    for lr in [5e-3, 1e-2]:
+        for actor_speed_ratio in [1, 10]:
+            for train_actor_every in [1, 10]:
+                cq = ClusterQueue(
+                    description="bn_everywhere_but_leafs_asr_{}_tae_{}".format(actor_speed_ratio, train_actor_every),
+                    video=False,
+                    actor_speed_ratio=actor_speed_ratio,
+                    train_actor_every=train_actor_every,
+                    discount_factor=df,
+                    n_workers=32,
+                    n_trajectories=200000,
+                    save_every=100000,
+                    learning_rate=lr,
+                    sequence_length=256,
+                    batch_size=256,
+                    buffer_size=1024,
+                    behaviour_noise_scale=0.025,
+                    target_smoothing_noise_scale=0.005,
+                    goal_buffer_size=1000,
+                    tau=0.05,
+                    updates_per_episode=1,
+                    restore_from="../experiments/2020_01_10-12.09.24_lr1.00e-04_discount_factor1.00e-04__checkpoint/checkpoints/000000100/")
