@@ -63,10 +63,10 @@ if __name__ == "__main__":
         help="Display environment."
     )
     parser.add_argument(
-        '-fe', '--flush-every',
+        '-se', '--save-every',
         type=int,
-        help="Flush every N simulated trajectory.",
-        default=20000
+        help="Save every N updates.",
+        default=200000
     )
     parser.add_argument(
         '-nt', '--n-trajectories',
@@ -103,6 +103,24 @@ if __name__ == "__main__":
         type=float,
         default=default_lr,
         help="learning rate."
+    )
+    parser.add_argument(
+        '-asr', '--actor-speed-ratio',
+        type=float,
+        default=10,
+        help="How much slower is the actor?"
+    )
+    parser.add_argument(
+        '-tae', '--train-actor-every',
+        type=int,
+        default=10,
+        help="How often is the actor trained?"
+    )
+    parser.add_argument(
+        '-tse', '--train-state-every',
+        type=int,
+        default=10,
+        help="How often is the state trained?"
     )
     parser.add_argument(
         '-df', '--discount-factor',
@@ -195,7 +213,7 @@ if __name__ == "__main__":
         help="Time resolution of the simulation."
     )
     parser.add_argument(
-        '-gbf', '--goal_buffer-size',
+        '-gbf', '--goal-buffer-size',
         type=int,
         default=500,
         help="Size of the buffer from which goals are sampled."
@@ -231,12 +249,9 @@ if __name__ == "__main__":
         if args.tensorboard:
             experiment.start_tensorboard()
         experiment.randomize_env(n=100)
-        for i in range(args.n_trajectories // args.flush_every):
-            experiment.asynchronously_train(args.flush_every)
-            if (i + 1) % 100 == 0:
-                experiment.save_model()
+        for i in range(args.n_trajectories // args.save_every):
+            experiment.asynchronously_train(args.save_every)
+            experiment.save_model()
         if args.video:
             experiment.save_video("final")
             experiment.save_video_all_goals("bragging", n_frames=150)
-        if not (i + 1) % 100 == 0:
-            experiment.save_model()
