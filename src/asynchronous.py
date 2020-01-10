@@ -142,6 +142,9 @@ class Worker:
         self.updates_per_episode = self.conf.worker_conf.updates_per_episode
         self.batch_size = self.conf.worker_conf.batch_size
         self.learning_rate = self.conf.worker_conf.learning_rate
+        self.actor_speed_ratio = self.conf.worker_conf.actor_speed_ratio
+        self.train_actor_every = self.conf.worker_conf.train_actor_every
+        self.train_state_every = self.conf.worker_conf.train_state_every
         self.tau = self.conf.worker_conf.tau
         self.behaviour_noise_scale = self.conf.worker_conf.behaviour_noise_scale
         self.target_smoothing_noise_scale = self.conf.worker_conf.target_smoothing_noise_scale
@@ -180,6 +183,7 @@ class Worker:
             self.parent_state_1,
             self.parent_gstate_1,
             learning_rate=self.learning_rate,
+            actor_speed_ratio=self.actor_speed_ratio,
             discount_factor=self.discount_factor,
             tau=self.tau,
             behaviour_noise_scale=self.behaviour_noise_scale,
@@ -195,6 +199,7 @@ class Worker:
             self.parent_state_1,
             self.parent_gstate_1,
             learning_rate=self.learning_rate,
+            actor_speed_ratio=self.actor_speed_ratio,
             discount_factor=self.discount_factor,
             tau=self.tau,
             behaviour_noise_scale=None,
@@ -210,6 +215,7 @@ class Worker:
             self.parent_state_1,
             self.parent_gstate_1,
             learning_rate=self.learning_rate,
+            actor_speed_ratio=self.actor_speed_ratio,
             discount_factor=self.discount_factor,
             tau=self.tau,
             behaviour_noise_scale=self.behaviour_noise_scale,
@@ -351,8 +357,8 @@ class Worker:
             for i in range(self.updates_per_episode):
                transitions = self.replay_buffer.batch(self.batch_size)
                stacked_transitions = stack_transitions(transitions)
-               train_actor = self._local_step % 10 == 0
-               train_state = train_actor
+               train_actor = self._local_step % self.train_actor_every == 0 and global_step > 10000
+               train_state = self._local_step % self.train_state_every == 0
                global_step = self.update_reinforcement_learning(stacked_transitions, train_actor=train_actor, train_state=train_state)
                if global_step >= n_updates - self._n_workers:
                    break
