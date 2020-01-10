@@ -1,23 +1,13 @@
 import sys
 import pickle
-# from discretization import np_discretization_reward
-# from scipy import special
-# from tempfile import TemporaryDirectory
-# import png
 import environment
 from replay_buffer import Buffer
-# from goal_library import GoalLibrary
 import socket
 import multiprocessing
 import subprocess
 import numpy as np
-# from numpy import pi, log
 import tensorflow as tf
-# from tensorflow.contrib.keras import models
-# from tensorflow.contrib.keras import layers
 import time
-# import viewer
-# from viewer2 import DisplayWindow
 from display import Display
 import os
 from imageio import get_writer
@@ -124,7 +114,7 @@ def get_available_port(start_port=6006):
 
 
 class Worker:
-    def __init__(self, task_index, pipe, cluster, logdir, conf):
+    def __init__(self, task_index, pipe, summary_queue, cluster, logdir, conf):
         self.task_index = task_index
         self.cluster = cluster
         self._n_workers = self.cluster.num_tasks("worker") - 1
@@ -162,6 +152,7 @@ class Worker:
         self.goals_buffer.force_register(populate_buffer)
         #
         self.pipe = pipe
+        self.summary_queue = summary_queue
         self.replay_buffer = Buffer(self.replay_buffer_size)
         state_size = self.get_state().shape[1]
         goal_size = self.get_gstate().shape[1]
@@ -187,7 +178,7 @@ class Worker:
             discount_factor=self.discount_factor,
             tau=self.tau,
             behaviour_noise_scale=self.behaviour_noise_scale,
-            target_smoothing_noise_scale=self.target_smoothing_noise_scale,
+            target_smoothing_noise_scale=None,
             batchnorm_training=False
         )
         print("{} agency_test call".format(self.name))
@@ -218,31 +209,30 @@ class Worker:
             actor_speed_ratio=self.actor_speed_ratio,
             discount_factor=self.discount_factor,
             tau=self.tau,
-            behaviour_noise_scale=self.behaviour_noise_scale,
+            behaviour_noise_scale=None,
             target_smoothing_noise_scale=self.target_smoothing_noise_scale,
             batchnorm_training=True
         )
 
         def get_placeholder(agency_call):
             return {
-                agency_call.goal_0_placeholder: "goal_0",
-                agency_call.state_0_placeholder: "state_0",
-                agency_call.gstate_0_placeholder: "gstate_0",
-                agency_call.goal_1_placeholder: "goal_1",
-                agency_call.state_1_placeholder: "state_1",
-                agency_call.gstate_1_placeholder: "gstate_1"
+                agency_call.placeholder_goal_0: "goal_0",
+                agency_call.placeholder_state_0: "state_0",
+                agency_call.placeholder_gstate_0: "gstate_0",
+                agency_call.placeholder_goal_1: "goal_1",
+                agency_call.placeholder_state_1: "state_1",
+                agency_call.placeholder_gstate_1: "gstate_1"
             }
-
         self._placeholder_tree_template = self.agency_update.tree_map(get_placeholder)
-        name = self.agency_update.name
-        self._placeholder_tree_template[name] = {
-            self.parent_goal_0: "goal_0",
-            self.parent_state_0: "state_0",
-            self.parent_gstate_0: "gstate_0",
-            self.parent_goal_1: "goal_1",
-            self.parent_state_1: "state_1",
-            self.parent_gstate_1: "gstate_1"
+        self._placeholder_tree_template[self.agency_update.name] = {
+            self.parent_goal_0: "root_goal_0",
+            self.parent_state_0: "root_state_0",
+            self.parent_gstate_0: "root_gstate_0",
+            self.parent_goal_1: "root_goal_1",
+            self.parent_state_1: "root_state_1",
+            self.parent_gstate_1: "root_gstate_1"
         }
+
         # define fetches to be called in a session
         self.global_step = tf.Variable(0, dtype=tf.int64)
         self.global_step_inc = self.global_step.assign_add(1)
@@ -252,14 +242,29 @@ class Worker:
             "root_critic_train_op": self.agency_update.root_critic_train_op,
             "root_readout_train_op": self.agency_update.root_readout_train_op,
             "root_update_target_train_op": self.agency_update.root_update_target_train_op,
+            "root_batchnorm_train_op": self.agency_update.root_batchnorm_train_op,
             "global_step": self.global_step_inc
         }
         self.train_critic_fetches = {
             "root_critic_train_op": self.agency_update.root_critic_train_op,
             "root_readout_train_op": self.agency_update.root_readout_train_op,
+            "root_update_target_train_op": self.agency_update.root_update_target_train_op,
+            "root_batchnorm_train_op": self.agency_update.root_batchnorm_train_op,
             "global_step": self.global_step_inc
         }
         self.train_state_fetches = self.agency_update.root_state_train_op
+
+        #### TEMP ####
+        # left_arm = self.agency_update["left_arm"]
+        # self.debug_fetch = {
+        #     "reward": tf.shape(left_arm.reward),
+        #     "critic_loss": tf.shape(left_arm.critic_0_loss),
+        #     "critic_out": tf.shape(left_arm.predicted_return_00),
+        #     "critic_target": tf.shape(left_arm.critic_target),
+        #     "critic_true": tf.shape(self.parent_gstate_0[:, 2]),
+        #     "predicted_return_1_target": tf.shape(left_arm.predicted_return_1_target)
+        # }
+        #### TEMP ####
 
         def behaviour_fetches_map_func(agency_call):
             return {
@@ -267,20 +272,17 @@ class Worker:
                 "state_0": agency_call.state_0,
                 "gstate_0": agency_call.gstate_0
             }
-
         self.training_behaviour_fetches = self.agency_behaviour.tree_map(behaviour_fetches_map_func)
-        name = self.agency_behaviour.name
-        self.training_behaviour_fetches[name] = {
-            "goal_0": self.parent_goal_0,
-            "state_0": self.parent_state_0,
-            "gstate_0": self.parent_gstate_0
+        self.training_behaviour_fetches[self.agency_behaviour.name] = {
+            "root_goal_0": self.parent_goal_0,
+            "root_state_0": self.parent_state_0,
+            "root_gstate_0": self.parent_gstate_0
         }
         self.testing_behaviour_fetches = self.agency_test.tree_map(behaviour_fetches_map_func)
-        name = self.agency_test.name
-        self.testing_behaviour_fetches[name] = {
-            "goal_0": self.parent_goal_0,
-            "state_0": self.parent_state_0,
-            "gstate_0": self.parent_gstate_0
+        self.testing_behaviour_fetches[self.agency_test.name] = {
+            "root_goal_0": self.parent_goal_0,
+            "root_state_0": self.parent_state_0,
+            "root_gstate_0": self.parent_gstate_0
         }
 
         def display_fetches_map_func(agency_call):
@@ -290,31 +292,38 @@ class Worker:
                 "readout_state": agency_call.readout_state,
                 "readout_gstate": agency_call.readout_gstate,
                 "reward": agency_call.reward,
-                "predicted_return": agency_call.predicted_return
+                "predicted_return": agency_call.predicted_return_00,
+                # "predicted_return": agency_call.predicted_return_01_target,
+                "critic_target": agency_call.critic_target
             }
-
         self.display_testing_behaviour_fetches = self.agency_test.tree_map(display_fetches_map_func)
-        name = self.agency_test.name
-        self.display_testing_behaviour_fetches[name] = {
+        self.display_testing_behaviour_fetches[self.agency_test.name] = {
             "goal_0": self.parent_goal_0,
             "state_0": self.parent_state_0,
             "gstate_0": self.parent_gstate_0
         }
         self.display_training_behaviour_fetches = self.agency_behaviour.tree_map(display_fetches_map_func)
-        name = self.agency_behaviour.name
-        self.display_training_behaviour_fetches[name] = {
+        self.display_training_behaviour_fetches[self.agency_behaviour.name] = {
             "goal_0": self.parent_goal_0,
             "state_0": self.parent_state_0,
             "gstate_0": self.parent_gstate_0
         }
-        self.summary_writer = tf.summary.FileWriter(self.logdir + "/worker{}".format(task_index))
+
         self.saver = tf.train.Saver()
         self._initializer = tf.global_variables_initializer()
         self._report_non_initialized = tf.report_uninitialized_variables()
         self.sess = tf.Session(target=self.server.target)
 
+    def add_summary(self, summary, global_step):
+        try:
+            self.summary_queue.put((summary, global_step), block=False)
+        except multiprocessing.Queue.Full:
+            print("{} could not register it's summary. (Queue is full)")
+
+
     def initialize(self):
         self.sess.run(self._initializer)
+        self.sess.run(self.agency_update.root_init_target_op)
         print("{}  variables initialized".format(self.name))
 
     def wait_for_variables_initialization(self):
@@ -416,11 +425,12 @@ class Worker:
             left_shoulder = left_arm["childs"][1]["left_shoulder"]
             left_elbow = left_arm["childs"][0]["left_elbow"]
         # print(left_elbow["goal_0"][0, 0], left_shoulder["goal_0"][0, 0], right_elbow["goal_0"][0, 0], right_shoulder["goal_0"][0, 0])
+        # print(transition)
         return {
-            "Arm1_to_Arm2_Left": left_elbow["goal_0"][0, 0],
-            "Ground_to_Arm1_Left": left_shoulder["goal_0"][0, 0],
-            "Arm1_to_Arm2_Right": right_elbow["goal_0"][0, 0],
-            "Ground_to_Arm1_Right": right_shoulder["goal_0"][0, 0]
+            "Arm1_to_Arm2_Left": left_elbow["goal_0"][0, 0] * 2,
+            "Ground_to_Arm1_Left": left_shoulder["goal_0"][0, 0] * 4,
+            "Arm1_to_Arm2_Right": right_elbow["goal_0"][0, 0] * 2,
+            "Ground_to_Arm1_Right": right_shoulder["goal_0"][0, 0] * 4
         }
 
     def run_n_steps(self):
@@ -615,6 +625,9 @@ class Worker:
         else:
             # train critic only
             ret = self.sess.run(self.train_critic_fetches, feed_dict=feed_dict)
+            # debug
+            # ret, debug_data = self.sess.run([self.train_critic_fetches, self.debug_fetch], feed_dict=feed_dict)
+            # print(debug_data)
         if train_state:
             # train state
             feed_dict = self.state_feed_dict(stacked_transitions)
@@ -623,9 +636,9 @@ class Worker:
         if ret["global_step"] % 100 == 0:
             print("{} finished update number {}".format(self.name, ret["global_step"]))
         self._local_step += 1
-        if self._local_step % 100 == 0:
+        if (ret["global_step"] < 20000 and ret["global_step"] % 100 == 0) or (ret["global_step"] >= 20000 and ret["global_step"] % 500 == 0):
             feed_dict = self.state_feed_dict(stacked_transitions)
-            self.summary_writer.add_summary(
+            self.add_summary(
                 self.sess.run(self.agency_update.root_summary_op, feed_dict=feed_dict),
                 global_step=ret["global_step"]
             )
@@ -640,20 +653,21 @@ class Worker:
         return flatten_placeholder_tree(placeholder_tree)
 
     def state_feed_dict(self, stacked_transitions):
+        # hard coded, must be changed
         return {
-            self.parent_goal_0: stacked_transitions["all_body"]["goal_0"],
-            self.parent_state_0: stacked_transitions["all_body"]["state_0"],
-            self.parent_state_1: stacked_transitions["all_body"]["state_1"],
-            self.parent_gstate_0: stacked_transitions["all_body"]["gstate_0"],
-            self.parent_gstate_1: stacked_transitions["all_body"]["gstate_1"]
+            self.parent_goal_0: stacked_transitions["all_body"]["root_goal_0"],
+            self.parent_state_0: stacked_transitions["all_body"]["root_state_0"],
+            self.parent_gstate_0: stacked_transitions["all_body"]["root_gstate_0"],
+            self.parent_state_1: stacked_transitions["all_body"]["root_state_1"],
+            self.parent_gstate_1: stacked_transitions["all_body"]["root_gstate_1"]
         }
 
     def display_feed_dict(self, goal_0, state_0, gstate_0, state_1, gstate_1):
         return {
             self.parent_goal_0: goal_0,
             self.parent_state_0: state_0,
-            self.parent_state_1: state_1,
             self.parent_gstate_0: gstate_0,
+            self.parent_state_1: state_1,
             self.parent_gstate_1: gstate_1
         }
 
@@ -663,6 +677,13 @@ class Worker:
             self.parent_state_0: state,
             self.parent_gstate_0: gstate
         }
+
+
+def collect_summaries(queue, path):
+    with tf.summary.FileWriter(path) as writer:
+        while True:
+            summary, global_step = queue.get()
+            writer.add_summary(summary, global_step=global_step)
 
 
 class Experiment:
@@ -699,8 +720,14 @@ class Experiment:
             args=(i,),
             daemon=True)
             for i in range(self.n_workers)]
+        self.summary_queue = multiprocessing.Queue(maxsize=1000)
+        self.summary_collector_process = multiprocessing.Process(
+            target=collect_summaries,
+            args=(self.summary_queue, self.logdir),
+            daemon=True
+        )
         ### start all processes ###
-        all_processes = self.parameter_servers_processes + self.workers_processes
+        all_processes = self.parameter_servers_processes + self.workers_processes + [self.summary_collector_process]
         for p in all_processes:
             p.start()
         print("EXPERIMENT: all processes started. Waiting for answer...")
@@ -727,7 +754,7 @@ class Experiment:
         server.join()
 
     def worker_func(self, task_index):
-        worker = Worker(task_index, self.there_pipes[task_index], self.cluster, self.logdir, self.conf)
+        worker = Worker(task_index, self.there_pipes[task_index], self.summary_queue, self.cluster, self.logdir, self.conf)
         if task_index == 0:
             worker.initialize()
         else:
