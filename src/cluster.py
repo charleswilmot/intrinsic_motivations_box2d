@@ -32,7 +32,7 @@ class ClusterQueue:
         print("\n" * 2, self.cmd_slurm)
         print(self.cmd_python, "\n" * 2)
         os.system(self.cmd)
-        time.sleep(1)
+        time.sleep(60)
 
     def _key_to_flag(self, key):
         return "--" + key.replace("_", "-")
@@ -60,26 +60,49 @@ class ClusterQueue:
 #     save_every=100,
 #     updates_per_episode=1)
 
-for df in [0.001, 0.6]:
-    for lr in [5e-3, 1e-2]:
-        for actor_speed_ratio in [1, 10]:
-            for train_actor_every in [1, 10]:
-                cq = ClusterQueue(
-                    description="bn_everywhere_but_leafs_asr_{}_tae_{}".format(actor_speed_ratio, train_actor_every),
-                    video=False,
-                    actor_speed_ratio=actor_speed_ratio,
-                    train_actor_every=train_actor_every,
-                    discount_factor=df,
-                    n_workers=32,
-                    n_trajectories=200000,
-                    save_every=100000,
-                    learning_rate=lr,
-                    sequence_length=256,
-                    batch_size=256,
-                    buffer_size=1024,
-                    behaviour_noise_scale=0.025,
-                    target_smoothing_noise_scale=0.005,
-                    goal_buffer_size=1000,
-                    tau=0.05,
-                    updates_per_episode=1,
-                    restore_from="../experiments/2020_01_10-12.09.24_lr1.00e-04_discount_factor1.00e-04__checkpoint/checkpoints/000000100/")
+
+for learning_rate in [1e-4, 1e-3, 5e-3]:
+    for actor_speed_ratio in [10000, 1000, 100, 50, 10]:
+        train_actor_every = 1
+        cq = ClusterQueue(
+            description="bn_everywhere_but_leafs_asr_{}_tae_{}".format(actor_speed_ratio, train_actor_every),
+            video=False,
+            actor_speed_ratio=actor_speed_ratio,
+            train_actor_every=train_actor_every,
+            discount_factor=0.6,
+            n_workers=4,
+            n_trajectories=200000,
+            save_every=100000,
+            learning_rate=learning_rate,
+            sequence_length=256,
+            batch_size=256,
+            buffer_size=1024,
+            behaviour_noise_scale=0.025,
+            target_smoothing_noise_scale=0.005,
+            goal_buffer_size=1000,
+            tau=0.05,
+            updates_per_episode=1,
+            restore_from="../experiments/2020_01_10-12.09.24_lr1.00e-04_discount_factor1.00e-04__checkpoint/checkpoints/000000100/")
+
+
+    for train_actor_every in [10000, 1000, 100, 50, 10]:
+        actor_speed_ratio = 1
+        cq = ClusterQueue(
+            description="bn_everywhere_but_leafs_asr_{}_tae_{}".format(actor_speed_ratio, train_actor_every),
+            video=False,
+            actor_speed_ratio=actor_speed_ratio,
+            train_actor_every=train_actor_every,
+            discount_factor=0.6,
+            n_workers=4,
+            n_trajectories=200000,
+            save_every=100000,
+            learning_rate=learning_rate,
+            sequence_length=256,
+            batch_size=256,
+            buffer_size=1024,
+            behaviour_noise_scale=0.025,
+            target_smoothing_noise_scale=0.005,
+            goal_buffer_size=1000,
+            tau=0.05,
+            updates_per_episode=1,
+            restore_from="../experiments/2020_01_10-12.09.24_lr1.00e-04_discount_factor1.00e-04__checkpoint/checkpoints/000000100/")
