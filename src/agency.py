@@ -597,16 +597,48 @@ class AgencyModel(AgencyRootModel):
             with tf.name_scope(""):
                 # critics
                 mean_critic_1_loss_summary = tf.summary.scalar(
-                    "/mean_critic_0_loss/{}".format(self.name),
+                    "/critic_0_loss_mean/{}".format(self.name),
                     tf.reduce_mean(tensors["critic_0_loss"])
                 )
                 mean_critic_2_loss_summary = tf.summary.scalar(
-                    "/mean_critic_1_loss/{}".format(self.name),
+                    "/critic_1_loss_mean/{}".format(self.name),
                     tf.reduce_mean(tensors["critic_1_loss"])
                 )
+                mean, var = tf.nn.moments(tensors["reward"], axes=[0, 1])
+                std = tf.sqrt(var)
                 mean_reward_summary = tf.summary.scalar(
-                    "/mean_reward/{}".format(self.name),
-                    tf.reduce_mean(tensors["reward"])
+                    "/reward_mean/{}".format(self.name),
+                    mean
+                )
+                std_reward_summary = tf.summary.scalar(
+                    "/reward_std/{}".format(self.name),
+                    std
+                )
+                min_reward_summary = tf.summary.scalar(
+                    "/reward_min/{}".format(self.name),
+                    tf.reduce_min(tensors["reward"])
+                )
+                max_reward_summary = tf.summary.scalar(
+                    "/reward_max/{}".format(self.name),
+                    tf.reduce_max(tensors["reward"])
+                )
+                mean, var = tf.nn.moments(tensors["goal_0"], axes=[0, 1])
+                std = tf.sqrt(var)
+                mean_goal = tf.summary.scalar(
+                    "/goal_mean/{}".format(self.name),
+                    mean
+                )
+                std_goal = tf.summary.scalar(
+                    "/goal_std/{}".format(self.name),
+                    std
+                )
+                min_goal = tf.summary.scalar(
+                    "/goal_min/{}".format(self.name),
+                    tf.reduce_min(tensors["goal_0"])
+                )
+                max_goal = tf.summary.scalar(
+                    "/goal_max/{}".format(self.name),
+                    tf.reduce_max(tensors["goal_0"])
                 )
                 # activity
                 goal_histogram = tf.summary.histogram(
@@ -640,7 +672,9 @@ class AgencyModel(AgencyRootModel):
                 ]
                 tensors["summary"] = tf.summary.merge([
                     mean_critic_1_loss_summary, mean_critic_2_loss_summary,
-                    mean_reward_summary, goal_histogram
+                    mean_reward_summary, goal_histogram, std_reward_summary,
+                    min_reward_summary, max_reward_summary, mean_goal, std_goal,
+                    min_goal, max_goal
                     ] +
                     critic_1_histograms + critic_2_histograms + actor_histogram + state_histogram
                 )
