@@ -15,12 +15,6 @@ if __name__ == "__main__":
         help="Path to the checkpoint."
     )
     parser.add_argument(
-        '-n', "--n-workers",
-        type=int,
-        default=10,
-        help="Number of workers."
-    )
-    parser.add_argument(
         '--name',
         type=str,
         default="final",
@@ -35,8 +29,6 @@ if __name__ == "__main__":
         conf = pickle.load(f)
 
     with TemporaryDirectory() as tmppath:
-        with Experiment(1, args.n_workers, tmppath + "/replay", conf, display_dpi=3) as experiment:
+        with Experiment(1, 1, tmppath + "/replay", conf, display_dpi=3) as experiment:
             experiment.restore_model(checkpoint_path)
-            experiment.restore_goal_library(experiment_path + "/goals/dumps/worker_0.pkl")
-            experiment.save_video(args.name, path=experiment_path + "/video", n_frames=2000)
-            experiment.save_video_all_goals(args.name, path=experiment_path + "/video", n_frames=150)
+            experiment.save_video(args.name + ".mp4", path=experiment_path + "/video", length_in_sec=120)

@@ -10,7 +10,6 @@ import tensorflow as tf
 import time
 from display import Display
 import os
-from imageio import get_writer
 import agency
 from goal_buffer import GoalBuffer
 
@@ -85,6 +84,22 @@ def flatten_placeholder_tree(placeholder_tree):
     return ret
 
 
+to_env_name = {
+    "left_elbow": "Arm1_to_Arm2_Left",
+    "right_elbow": "Arm1_to_Arm2_Right",
+    "left_shoulder": "Ground_to_Arm1_Left",
+    "right_shoulder": "Ground_to_Arm1_Right"
+}
+
+
+def to_action(transition):
+    if not len(transition["childs"]):
+        name = [k for k in transition if k != "childs"][0]
+        return {to_env_name[name]: transition[name]["goal_0"][0, 0]}
+    else:
+        return {k: v for d in [to_action(c) for c in transition["childs"]] for k, v in d.items()}
+
+
 def get_cluster(n_parameter_servers, n_workers):
     spec = {}
     port = get_available_port(2222)
@@ -142,14 +157,9 @@ class Worker:
         # everything related to the goal buffer (used for sampling goals)
         self.goals_buffer = GoalBuffer(
             self.conf.worker_conf.goal_buffer_size,
-            len(self.get_gstate()[0]),
-            self.conf.worker_conf.goal_buffer_keep_percent
+            len(self.get_gstate()[0])
         )
-        populate_buffer = []
-        for i in range(20):
-            self.randomize_env()
-            populate_buffer.append(self.get_gstate()[0])
-        self.goals_buffer.force_register(populate_buffer)
+        self.goals_buffer.register(self.get_gstate())  # initialize the buffer with 1 goal
         #
         self.pipe = pipe
         self.summary_queue = summary_queue
@@ -254,18 +264,6 @@ class Worker:
         }
         self.train_state_fetches = self.agency_update.root_state_train_op
 
-        #### TEMP ####
-        # left_arm = self.agency_update["left_arm"]
-        # self.debug_fetch = {
-        #     "reward": tf.shape(left_arm.reward),
-        #     "critic_loss": tf.shape(left_arm.critic_0_loss),
-        #     "critic_out": tf.shape(left_arm.predicted_return_00),
-        #     "critic_target": tf.shape(left_arm.critic_target),
-        #     "critic_true": tf.shape(self.parent_gstate_0[:, 2]),
-        #     "predicted_return_1_target": tf.shape(left_arm.predicted_return_1_target)
-        # }
-        #### TEMP ####
-
         def behaviour_fetches_map_func(agency_call):
             return {
                 "goal_0": agency_call.goal_0,
@@ -314,21 +312,23 @@ class Worker:
         self._report_non_initialized = tf.report_uninitialized_variables()
         self.sess = tf.Session(target=self.server.target)
 
+    def to_action(self, transition):
+        return to_action(transition)
+
     def add_summary(self, summary, global_step):
         try:
             self.summary_queue.put((summary, global_step), block=False)
         except multiprocessing.Queue.Full:
             print("{} could not register it's summary. (Queue is full)")
 
-
     def initialize(self):
         self.sess.run(self._initializer)
         self.sess.run(self.agency_update.root_init_target_op)
-        print("{}  variables initialized".format(self.name))
+        print("{} variables initialized".format(self.name))
 
     def wait_for_variables_initialization(self):
         while len(self.sess.run(self._report_non_initialized)) > 0:
-            print("{}  waiting for variable initialization...".format(self.name))
+            print("{} waiting for variable initialization...".format(self.name))
             time.sleep(1)
 
     def __call__(self):
@@ -367,7 +367,8 @@ class Worker:
                transitions = self.replay_buffer.batch(self.batch_size)
                stacked_transitions = stack_transitions(transitions)
                train_actor = self._local_step % self.train_actor_every == 0 and global_step > 10000
-               train_state = self._local_step % self.train_state_every == 0
+               train_state = train_actor
+               # train_state = self._local_step % self.train_state_every == 0
                global_step = self.update_reinforcement_learning(stacked_transitions, train_actor=train_actor, train_state=train_state)
                if global_step >= n_updates - self._n_workers:
                    break
@@ -375,20 +376,14 @@ class Worker:
 
     def run_display(self, training=False):
         display = Display(self, training)
+        display.show()
         self.pipe.recv()  # done
         self.pipe.send("{} (display) going IDLE".format(self.name))
 
-    # def run_display(self, training=True):
-    #     win = DisplayWindow(self.discount_factor, lookback=50)
-    #     i = 0
-    #     while not self.pipe.poll():
-    #         self.run_n_display_steps(win, training)
-    #         i = (i + 1) % 2
-    #         if i == 0:
-    #             self.randomize_env()
-    #     win.close()
-    #     self.pipe.recv()  # done
-    #     self.pipe.send("{} (display) going IDLE".format(self.name))
+    def save_video(self, path, n_frames=None, length_in_sec=None, training=False):
+        display = Display(self, training)
+        display.save(path, n_frames, length_in_sec)
+        self.pipe.send("{} saved video under {}. display going IDLE".format(self.name, path))
 
     def save_contact_logs(self, name):
         path = self.logdir + "/worker{}/contacts_{}.pkl".format(self.task_index, name)
@@ -404,35 +399,6 @@ class Worker:
     def get_gstate(self):
         return self.env.sincos_positions[np.newaxis]
 
-    def to_action(self, transition):
-        # example (full agency)
-        if "left_arm" in transition["childs"][0]:
-            left_arm = transition["childs"][0]
-            right_arm = transition["childs"][1]
-        else:
-            left_arm = transition["childs"][1]
-            right_arm = transition["childs"][0]
-        if "right_shoulder" in right_arm["childs"][0]:
-            right_shoulder = right_arm["childs"][0]["right_shoulder"]
-            right_elbow = right_arm["childs"][1]["right_elbow"]
-        else:
-            right_shoulder = right_arm["childs"][1]["right_shoulder"]
-            right_elbow = right_arm["childs"][0]["right_elbow"]
-        if "left_shoulder" in left_arm["childs"][0]:
-            left_shoulder = left_arm["childs"][0]["left_shoulder"]
-            left_elbow = left_arm["childs"][1]["left_elbow"]
-        else:
-            left_shoulder = left_arm["childs"][1]["left_shoulder"]
-            left_elbow = left_arm["childs"][0]["left_elbow"]
-        # print(left_elbow["goal_0"][0, 0], left_shoulder["goal_0"][0, 0], right_elbow["goal_0"][0, 0], right_shoulder["goal_0"][0, 0])
-        # print(transition)
-        return {
-            "Arm1_to_Arm2_Left": left_elbow["goal_0"][0, 0] * 2,
-            "Ground_to_Arm1_Left": left_shoulder["goal_0"][0, 0] * 4,
-            "Arm1_to_Arm2_Right": right_elbow["goal_0"][0, 0] * 2,
-            "Ground_to_Arm1_Right": right_shoulder["goal_0"][0, 0] * 4
-        }
-
     def run_n_steps(self):
         goal = self.get_goal()
         state = self.get_state()
@@ -445,7 +411,7 @@ class Worker:
             # feed_dict feeds root with data from 'state', 'gstate' and 'goal'
             transition_0 = self.sess.run(self.training_behaviour_fetches, feed_dict=feed_dict)
             # set action
-            action = self.to_action(transition_0)
+            action = to_action(transition_0)
             self.env.set_speeds(action)
             # run environment step
             self.env.env_step()
@@ -479,135 +445,6 @@ class Worker:
             self.env.env_step()
         if _answer:
             self.pipe.send("{} applied {} random actions".format(self.name, n))
-
-    # def run_n_display_steps(self, win, training=False):
-    #     goal = self.get_goal()
-    #     state_0 = self.get_state()
-    #     gstate_0 = self.get_gstate()
-    #     behaviour_fetches = self.display_training_behaviour_fetches if training else self.display_testing_behaviour_fetches
-    #     to_goal_buffer = []
-    #     feed_dict = self.behaviour_feed_dict(goal, state_0, gstate_0)
-    #     # feed_dict feeds root with data from 'state', 'gstate' and 'goal'
-    #     transition_0 = self.sess.run(self.training_behaviour_fetches, feed_dict=feed_dict)
-    #     # set action
-    #     action = self.to_action(transition_0)
-    #     self.env.set_speeds(action)
-    #     # run environment step
-    #     self.env.env_step()
-    #     # get states
-    #     state_1 = self.get_state()
-    #     gstate_1 = self.get_gstate()
-    #     for iteration in range(self.sequence_length):
-    #         to_goal_buffer.append(gstate_0[0])
-    #         feed_dict = self.display_feed_dict(goal, state_0, gstate_0, state_1, gstate_1)
-    #         # feed_dict feeds root with data from 'state', 'gstate' and 'goal'
-    #         transition, global_step = self.sess.run([behaviour_fetches, self.global_step], feed_dict=feed_dict)
-    #         # update window
-    #         win(transition, self.env.vision, global_step)
-    #         # set action
-    #         action = self.to_action(transition)
-    #         self.env.set_speeds(action)
-    #         # run environment step
-    #         self.env.env_step()
-    #         # rotate states
-    #         state_0 = state_1
-    #         gstate_0 = gstate_1
-    #         state_1 = self.get_state()
-    #         gstate_1 = self.get_gstate()
-    #     to_goal_buffer.append(gstate_0[0])
-    #     to_goal_buffer.append(gstate_1[0])
-    #     self.goals_buffer.register(to_goal_buffer)
-
-    # ### TODO ### (same as run_n_display_steps)
-    # def save_video(self, path, goal_index, n_frames=2000, training=False):
-    #     # goal_index, goal = self.goal_library.select_goal_learning_potential(self.goal_temperature)
-    #     win = viewer.SkinAgentWindow(self.discount_factor, return_lookback=50, show=False)
-    #     win.set_return_lim([-0.1, 1.1])
-    #     width, height = win.fig.canvas.get_width_height()
-    #     goal_info = self.goal_library.goal_info(goal_index)
-    #     goal = goal_info["intensities"]
-    #     reaching_probability = goal_info["r|p"]
-    #     goals = goal[np.newaxis, :]
-    #     if training:
-    #         action_fetches = self.sampled_actions_indices
-    #         critic_fetches = self.sampled_q_value
-    #     else:
-    #         action_fetches = self.greedy_actions_indices
-    #         critic_fetches = self.greedy_q_value
-    #     fetches = [action_fetches, critic_fetches]
-    #     with get_writer(path + "/{:04d}.avi".format(goal_index), fps=25, format="mp4") as writer:
-    #         for i in range(n_frames):
-    #             feed_dict = self.to_feed_dict(states=self.get_state(True), goals=goal[np.newaxis, np.newaxis])
-    #             action, predicted_returns = self.sess.run(fetches, feed_dict=feed_dict)
-    #             action = action[0, 0]
-    #             # set positions in env
-    #             action_dict = self.actions_dict_from_indices(action)
-    #             # self.env.set_positions(action_dict)
-    #             self.env.set_speeds(action_dict)
-    #             # run action in env
-    #             self.env.env_step()
-    #             # get current vision
-    #             vision = self.env.vision
-    #             tactile_true = self.env.tactile
-    #             current_reward = np_discretization_reward(tactile_true, goal) * (1 - self.discount_factor)
-    #             predicted_return = np.max(predicted_returns)
-    #             # display
-    #             win(vision, tactile_true, goal, current_reward, predicted_return, reaching_probability=reaching_probability)
-    #             ############
-    #             # methode 1: ( https://matplotlib.org/3.1.1/gallery/animation/frame_grabbing_sgskip.html )
-    #             # writer.grab_frame()
-    #             ############
-    #             # methode 2: ( http://www.icare.univ-lille1.fr/tutorials/convert_a_matplotlib_figure )
-    #             frame = np.fromstring(win.fig.canvas.tostring_argb(), dtype=np.uint8).reshape(height, width, 4)
-    #             frame = frame[:, :, 1:]               # if we discard the alpha chanel
-    #             writer.append_data(frame)
-    #     self.pipe.send("{} saved video under {}".format(self.name, path))
-    #
-    # ### TODO ###
-    # def save_video_all_goals(self, path, n_frames=50, training=False):
-    #     win = viewer.SkinAgentWindow(self.discount_factor, return_lookback=50, show=False)
-    #     win.set_return_lim([-0.1, 1.1])
-    #     width, height = win.fig.canvas.get_width_height()
-    #     with get_writer(path + "/bragging.mp4", fps=25, format="mp4") as writer:
-    #         for goal_index in np.argsort(self.goal_library.goal_array["r|p"])[::-1]:
-    #             goal_info = self.goal_library.goal_info(goal_index)
-    #             goal = goal_info["intensities"]
-    #             reaching_probability = goal_info["r|p"]
-    #             goals = goal[np.newaxis, :]
-    #             if training:
-    #                 action_fetches = self.sampled_actions_indices
-    #                 critic_fetches = self.sampled_q_value
-    #             else:
-    #                 action_fetches = self.greedy_actions_indices
-    #                 critic_fetches = self.greedy_q_value
-    #             fetches = [action_fetches, critic_fetches]
-    #             print("{} goal index: {: 3d}    reaching probability: {:.2f}".format(self.name, goal_index, reaching_probability))
-    #             for i in range(n_frames):
-    #                 feed_dict = self.to_feed_dict(states=self.get_state(True), goals=goal[np.newaxis, np.newaxis])
-    #                 action, predicted_returns = self.sess.run(fetches, feed_dict=feed_dict)
-    #                 action = action[0, 0]
-    #                 # set positions in env
-    #                 action_dict = self.actions_dict_from_indices(action)
-    #                 # self.env.set_positions(action_dict)
-    #                 self.env.set_speeds(action_dict)
-    #                 # run action in env
-    #                 self.env.env_step()
-    #                 # get current vision
-    #                 vision = self.env.vision
-    #                 tactile_true = self.env.tactile
-    #                 current_reward = np_discretization_reward(tactile_true, goal) * (1 - self.discount_factor)
-    #                 predicted_return = np.max(predicted_returns)
-    #                 # display
-    #                 win(vision, tactile_true, goal, current_reward, predicted_return, reaching_probability=reaching_probability)
-    #                 ############
-    #                 # methode 1: ( https://matplotlib.org/3.1.1/gallery/animation/frame_grabbing_sgskip.html )
-    #                 # writer.grab_frame()
-    #                 ############
-    #                 # methode 2: ( http://www.icare.univ-lille1.fr/tutorials/convert_a_matplotlib_figure )
-    #                 frame = np.fromstring(win.fig.canvas.tostring_argb(), dtype=np.uint8).reshape(height, width, 4)
-    #                 frame = frame[:, :, 1:]               # if we discard the alpha chanel
-    #                 writer.append_data(frame)
-    #     self.pipe.send("{} saved video under {}".format(self.name, path))
 
     def update_reinforcement_learning(self, stacked_transitions, train_actor=True, train_state=True):
         # stack_transitions as the form :
@@ -805,12 +642,6 @@ class Experiment:
         for p in self.here_worker_pipes:
             p.recv()
 
-    def save_vision_related_to_goals(self):
-        for p in self.here_worker_pipes:
-            p.send(("save_vision_related_to_goals", self.goaldir))
-        for p in self.here_worker_pipes:
-            p.recv()
-
     def asynchronously_train(self, n_updates):
         for p in self.here_worker_pipes:
             p.send(("run_training", n_updates))
@@ -821,20 +652,9 @@ class Experiment:
         self.here_worker_pipes[0].send(("save", self.checkpointsdir))
         print(self.here_worker_pipes[0].recv())
 
-    def save_video(self, name, path=None, n_frames=2000, training=False):
-        path = self.videodir + "/" + name + "/" if path is None else path + "/" + name + "/"
-        os.mkdir(path)
-        n_workers = len(self.here_worker_pipes)
-        for i in range(self.library_size):
-            self.here_worker_pipes[i % n_workers].send(("save_video", path, i, n_frames, training))
-        for i in range(self.library_size):
-            print(self.here_worker_pipes[i % n_workers].recv())
-
-    def save_video_all_goals(self, name, path=None, n_frames=50, training=False):
-        path = self.videodir + "/" + name + "/" if path is None else path + "/" + name + "/"
-        os.mkdir(path)
-        n_workers = len(self.here_worker_pipes)
-        self.here_worker_pipes[0].send(("save_video_all_goals", path, n_frames, training))
+    def save_video(self, name, path=None, n_frames=None, length_in_sec=None, training=False):
+        path = self.videodir + "/" + name if path is None else path + "/" + name
+        self.here_worker_pipes[0].send(("save_video", path, n_frames, length_in_sec, training))
         print(self.here_worker_pipes[0].recv())
 
     def save_contact_logs(self, name):
