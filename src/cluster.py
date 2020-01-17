@@ -62,27 +62,30 @@ class ClusterQueue:
 
 
 actor_speed_ratio = 30
-train_actor_every = 30
-learning_rate = 5e-3
-cq = ClusterQueue(
-    description="bn_everywhere_but_leafs_asr_{}_tae_{}".format(actor_speed_ratio, train_actor_every),
-    video=False,
-    actor_speed_ratio=actor_speed_ratio,
-    train_actor_every=train_actor_every,
-    discount_factor=0.6,
-    n_workers=32,
-    n_trajectories=500000,
-    save_every=100000,
-    learning_rate=learning_rate,
-    sequence_length=256,
-    batch_size=256,
-    buffer_size=1024,
-    behaviour_noise_scale=0.025,
-    target_smoothing_noise_scale=0.005,
-    goal_buffer_size=1000,
-    tau=0.05,
-    updates_per_episode=1,
-    restore_from="../experiments/2020_01_10-12.09.24_lr1.00e-04_discount_factor1.00e-04__checkpoint/checkpoints/000000100/")
+train_actor_every = 5
+learning_rate = 5e-4
+
+for behaviour_noise_scale in [0.005, 0.01, 0.05, 0.1]:
+    for target_smoothing_noise_scale in [0.005, 0.01, 0.05, 0.1]:
+        cq = ClusterQueue(
+            description="asr_{}_tae_{}_bns_{}_tsn_{}".format(actor_speed_ratio, train_actor_every, behaviour_noise_scale, target_smoothing_noise_scale),
+            video=False,
+            actor_speed_ratio=actor_speed_ratio,
+            train_actor_every=train_actor_every,
+            discount_factor=0.6,
+            n_workers=32,
+            n_trajectories=500000,
+            save_every=100000,
+            learning_rate=learning_rate,
+            sequence_length=256,
+            batch_size=256,
+            buffer_size=1024,
+            behaviour_noise_scale=behaviour_noise_scale,
+            target_smoothing_noise_scale=target_smoothing_noise_scale,
+            goal_buffer_size=1000,
+            tau=0.05,
+            updates_per_episode=1,
+            restore_from="../experiments/2020_01_10-12.09.24_lr1.00e-04_discount_factor1.00e-04__checkpoint/checkpoints/000000100/")
 
 
 # for learning_rate in [1e-4, 1e-3, 5e-3]:
