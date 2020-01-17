@@ -3,44 +3,68 @@ from scipy.spatial import distance_matrix
 
 
 class GoalBuffer:
-    def __init__(self, buffer_size, goal_size, keep_percent=0.1):
+    def __init__(self, buffer_size, goal_size):
         self._index_last = 0
-        self._current_fifo_index = -1
         self._goal_size = goal_size
         self._buffer_size = buffer_size
         self._buffer = np.zeros((buffer_size, goal_size))
-        self._keep_percent = keep_percent
+        self._distance_matrix = np.zeros((buffer_size, buffer_size))
 
-    def force_register(self, goals):
-        self._append_fifo(goals)
+    def _maybe_register_one_goal(self, goal):
+        distances = self._distance_to_buffer(goal)
+        if self._index_last < self._buffer_size:
+            self._place_goal(goal, self._index_last, distances)
+            self._index_last += 1
+        else:
+            goal_min_distance = np.min(distances)
+            buffer_min_distance, index = self._min_distance()
+            if goal_min_distance > buffer_min_distance:
+                self._place_goal(goal, index, distances)
+
+    def _place_goal(self, goal, index, distances):
+            self._buffer[index] = goal
+            self._distance_matrix[index, :self._index_last] = distances
+            self._distance_matrix[:self._index_last, index] = distances
+            self._distance_matrix[index, index] = np.inf
+
+    def _distance_to_buffer(self, goal):
+        return distance_matrix(self._buffer[:self._index_last], np.array(goal).reshape((1, self._goal_size)))[:, 0]
+
+    def _min_distance(self):
+        index = np.unravel_index(
+            np.argmin(self._distance_matrix[:self._index_last, :self._index_last]),
+            (self._index_last, self._index_last)
+        )
+        return self._distance_matrix[index], index[0]
 
     def register(self, goals):
-        goals = np.array(goals)
-        n_goals = len(goals)
-        minimums = self._compute_min_distance_to_buffer(goals)
-        argsort = np.argsort(minimums)
-        keep = [goals[i] for i in argsort[-int(n_goals * self._keep_percent):]]
-        self._append_fifo(keep)
-
-    def _compute_min_distance_to_buffer(self, goals):
-        return np.min(distance_matrix(self._buffer, goals), axis=0)
-
-    def _append_fifo(self, keep):
-        for k in keep:
-            self._current_fifo_index += 1
-            self._current_fifo_index %= self._buffer_size
-            self._buffer[self._current_fifo_index] = k
-            if self._index_last < self._buffer_size:
-                self._index_last += 1
+        for goal in goals:
+            self._maybe_register_one_goal(goal)
 
     def sample(self):
-        return self._buffer[np.random.randint(self._index_last)]
+        index = np.random.randint(self._index_last)
+        index_nearest = np.argmin(self._distance_matrix[index])
+        epsilon = np.random.uniform()
+        return self._buffer[index] * epsilon + (1 - epsilon) * self._buffer[index_nearest]
 
 
 
 if __name__ == "__main__":
-    gb = GoalBuffer(10, 5)
+    np.set_printoptions(precision=3)
+    gb = GoalBuffer(500, 2)
 
-    for i in range(10):
-        gb.register(np.random.uniform(size=(20, 5)))
-        print(gb.sample())
+    for i in range(20):
+        gb.register(np.random.uniform(size=(2000, 2)))
+
+    import matplotlib.pyplot as plt
+
+    samples = np.array([gb.sample() for i in range(1000)])
+    x = samples[:, 0]
+    y = samples[:, 1]
+    plt.scatter(x=x, y=y)
+
+    x = gb._buffer[:, 0]
+    y = gb._buffer[:, 1]
+    plt.scatter(x=x, y=y)
+
+    plt.show()

@@ -24,7 +24,7 @@ class WorkerConf(ConfRoot):
                        train_actor_every, train_state_every,
                        buffer_size, updates_per_episode, batch_size,
                        tau, behaviour_noise_scale, target_smoothing_noise_scale,
-                       goal_buffer_size, goal_buffer_keep_percent,
+                       goal_buffer_size,
                        agency_conf_path):
         self.discount_factor = discount_factor
         self.sequence_length = sequence_length
@@ -39,7 +39,6 @@ class WorkerConf(ConfRoot):
         self.behaviour_noise_scale = behaviour_noise_scale
         self.target_smoothing_noise_scale = target_smoothing_noise_scale
         self.goal_buffer_size = goal_buffer_size
-        self.goal_buffer_keep_percent = goal_buffer_keep_percent
         self.agency_conf_path = agency_conf_path
 
     @staticmethod
@@ -57,7 +56,6 @@ class WorkerConf(ConfRoot):
                           args.behaviour_noise_scale,
                           args.target_smoothing_noise_scale,
                           args.goal_buffer_size,
-                          args.goal_buffer_keep_percent,
                           args.agency_conf_path)
 
 

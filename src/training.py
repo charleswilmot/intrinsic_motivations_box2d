@@ -219,12 +219,6 @@ if __name__ == "__main__":
         help="Size of the buffer from which goals are sampled."
     )
     parser.add_argument(
-        '-gbkp', '--goal-buffer-keep-percent',
-        type=float,
-        default=0.2,
-        help="Percentage of observed goals kept for sampling."
-    )
-    parser.add_argument(
         '-a', '--agency-conf-path',
         type=str,
         default="../agencies/simple_agency.txt",
