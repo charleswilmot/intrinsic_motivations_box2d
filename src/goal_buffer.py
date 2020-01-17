@@ -8,21 +8,23 @@ class GoalBuffer:
         self._goal_size = goal_size
         self._buffer_size = buffer_size
         self._buffer = np.zeros((buffer_size, goal_size))
+        self._ploting_data_buffer = [None] * buffer_size
         self._distance_matrix = np.zeros((buffer_size, buffer_size))
 
-    def _maybe_register_one_goal(self, goal):
+    def _maybe_register_one_goal(self, goal, ploting_data):
         distances = self._distance_to_buffer(goal)
         if self._index_last < self._buffer_size:
-            self._place_goal(goal, self._index_last, distances)
+            self._place_goal(goal, ploting_data, self._index_last, distances)
             self._index_last += 1
         else:
             goal_min_distance = np.min(distances)
             buffer_min_distance, index = self._min_distance()
             if goal_min_distance > buffer_min_distance:
-                self._place_goal(goal, index, distances)
+                self._place_goal(goal, ploting_data, index, distances)
 
-    def _place_goal(self, goal, index, distances):
+    def _place_goal(self, goal, ploting_data, index, distances):
             self._buffer[index] = goal
+            self._ploting_data_buffer[index] = ploting_data
             self._distance_matrix[index, :self._index_last] = distances
             self._distance_matrix[:self._index_last, index] = distances
             self._distance_matrix[index, index] = np.inf
@@ -37,15 +39,21 @@ class GoalBuffer:
         )
         return self._distance_matrix[index], index[0]
 
-    def register(self, goals):
-        for goal in goals:
-            self._maybe_register_one_goal(goal)
+    def register_many(self, goals, ploting_datas):
+        for goal, ploting_data in zip(goals, ploting_datas):
+            self._maybe_register_one_goal(goal, ploting_data)
+
+    def register_one(self, goal, ploting_data):
+        self._maybe_register_one_goal(goal, ploting_data)
 
     def sample(self):
         index = np.random.randint(self._index_last)
         index_nearest = np.argmin(self._distance_matrix[index])
         epsilon = np.random.uniform()
-        return self._buffer[index] * epsilon + (1 - epsilon) * self._buffer[index_nearest]
+        goal = self._buffer[index] * epsilon + (1 - epsilon) * self._buffer[index_nearest]
+        ploting_data_0 = self._ploting_data_buffer[index]
+        ploting_data_1 = self._ploting_data_buffer[index_nearest]
+        return goal, (ploting_data_0, ploting_data_1)
 
 
 

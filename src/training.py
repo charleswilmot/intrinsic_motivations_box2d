@@ -247,5 +247,4 @@ if __name__ == "__main__":
             experiment.asynchronously_train(args.save_every)
             experiment.save_model()
         if args.video:
-            experiment.save_video("final")
-            experiment.save_video_all_goals("bragging", n_frames=150)
+            experiment.save_video("final.mp4")

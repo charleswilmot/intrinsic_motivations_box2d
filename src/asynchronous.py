@@ -159,7 +159,7 @@ class Worker:
             self.conf.worker_conf.goal_buffer_size,
             len(self.get_gstate()[0])
         )
-        self.goals_buffer.register(self.get_gstate())  # initialize the buffer with 1 goal
+        self.goals_buffer.register_one(self.get_gstate()[0], self.env.ploting_data)  # initialize the buffer with 1 goal
         #
         self.pipe = pipe
         self.summary_queue = summary_queue
@@ -290,6 +290,7 @@ class Worker:
                 "readout_state": agency_call.readout_state,
                 "readout_gstate": agency_call.readout_gstate,
                 "reward": agency_call.reward,
+                "mean_distance_to_goal": agency_call.mean_distance_to_goal,
                 "predicted_return": agency_call.predicted_return_00,
                 # "predicted_return": agency_call.predicted_return_01_target,
                 "critic_target": agency_call.critic_target
@@ -391,7 +392,8 @@ class Worker:
         self.pipe.send("{} saved contact logs under {}".format(self.name, path))
 
     def get_goal(self):
-        return self.goals_buffer.sample()[np.newaxis]
+        goal, _ = self.goals_buffer.sample()
+        return goal[np.newaxis]
 
     def get_state(self):
         return np.concatenate([self.env.sincos_positions, self.env.speeds])[np.newaxis]
@@ -404,9 +406,7 @@ class Worker:
         state = self.get_state()
         gstate = self.get_gstate()
         transitions = []
-        to_goal_buffer = []
         for iteration in range(self.sequence_length):
-            to_goal_buffer.append(gstate[0])
             feed_dict = self.behaviour_feed_dict(goal, state, gstate)
             # feed_dict feeds root with data from 'state', 'gstate' and 'goal'
             transition_0 = self.sess.run(self.training_behaviour_fetches, feed_dict=feed_dict)
@@ -426,8 +426,7 @@ class Worker:
             transition = merge_before_after(transition_0, transition_1)
             transitions.append(transition)
             self.replay_buffer.incorporate(transition)
-        to_goal_buffer.append(gstate[0])
-        self.goals_buffer.register(to_goal_buffer)
+            self.goals_buffer.register_one(gstate[0], self.env.ploting_data)
         self.randomize_env()
         return transitions
 

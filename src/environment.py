@@ -287,6 +287,16 @@ class Environment(object):
         tactile_map = self.tactile
         return vision, positions, speeds, tactile_map
 
+    def _get_ploting_data(self):
+        # touching = [ce.contact.touching for ce in body.contacts if ce.contact.touching]
+        # color = (255, 0, 0) if len(touching) > 0 and key in self._env.renderer.tactile_bodies_names else (0, 0, 255)
+        return {
+            key: [body.GetWorldPoint(x)
+                  for x in np.vstack(body.fixtures[0].shape.vertices)]
+            for key, body in self.bodies.items()
+        }
+
+    ploting_data = property(_get_ploting_data)
     state = property(_get_state)
     positions = property(_get_state_positions)
     discrete_positions = property(_get_state_discrete_positions)
