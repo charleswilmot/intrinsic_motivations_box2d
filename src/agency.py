@@ -457,6 +457,7 @@ class AgencyModel(AgencyRootModel):
                 shape=tensors["gstate_1"].get_shape()
             )
             ### REWARD
+            tensors["mean_distance_to_goal"] = tf.reduce_mean(d(parent_goal_0, parent_gstate_0))
             tensors["reward"] = tf.reshape(d(parent_goal_0, parent_gstate_0) - d(parent_goal_0, parent_gstate_1), (-1, 1)) * np.sqrt(1 - discount_factor ** 2)
             ### CRITIC DEFINITION
             # CRITIC 0
@@ -595,6 +596,10 @@ class AgencyModel(AgencyRootModel):
             tensors["readout_train_op"] = readout_optimizer.minimize(tensors["readout_loss"])
             ### SUMMARIES
             with tf.name_scope(""):
+                mean_distance_to_goal_summary = tf.summary.scalar(
+                    "/mean_distance_to_goal/{}".format(self.name),
+                    tensors["mean_distance_to_goal"]
+                )
                 # critics
                 mean_critic_1_loss_summary = tf.summary.scalar(
                     "/critic_0_loss_mean/{}".format(self.name),
@@ -645,6 +650,10 @@ class AgencyModel(AgencyRootModel):
                     "/goal/{}".format(self.name),
                     tensors["goal_0"]
                 )
+                reward_histogram = tf.summary.histogram(
+                    "/reward/{}".format(self.name),
+                    tensors["reward"]
+                )
                 # weights
                 critic_1_histograms = [
                     tf.summary.histogram(
@@ -674,7 +683,7 @@ class AgencyModel(AgencyRootModel):
                     mean_critic_1_loss_summary, mean_critic_2_loss_summary,
                     mean_reward_summary, goal_histogram, std_reward_summary,
                     min_reward_summary, max_reward_summary, mean_goal, std_goal,
-                    min_goal, max_goal
+                    min_goal, max_goal, mean_distance_to_goal_summary, reward_histogram
                     ] +
                     critic_1_histograms + critic_2_histograms + actor_histogram + state_histogram
                 )
@@ -722,22 +731,8 @@ class AgencyCallRoot:
         ### STATE
         states_params = self.tree_map(lambda agency: agency.state_model_variables, as_list=True)
         states_params = [item for sublist in states_params for item in sublist]
-        # state_loss = sum(self.tree_map(
-        #         lambda agency_call:
-        #             tf.reduce_mean(
-        #             tf.reduce_sum(
-        #                 sum([tf.gradients(child.critic_loss, child.parent_state_0)[0] for child in agency_call.childs]) * agency_call.state_0,
-        #             axis=-1)),
-        #     as_list=True))
-        # state_loss = sum(self.tree_map(
-        #         lambda agency_call:
-        #             tf.reduce_mean(
-        #             tf.reduce_sum(
-        #                 tf.gradients(agency_call.critic_loss, agency_call.parent_state_0)[0] * agency_call.parent_state_0,
-        #             axis=-1)),
-        #     as_list=True))
-        state_loss = sum(self.tree_map(lambda agency_call: agency_call.critic_loss, as_list=True))
-        # state_loss = - sum(self.tree_map(lambda agency_call: agency_call.predicted_return_00, as_list=True))
+        # state_loss = sum(self.tree_map(lambda agency_call: agency_call.critic_loss, as_list=True))
+        state_loss = - sum(self.tree_map(lambda agency_call: tf.reduce_mean(agency_call.predicted_return_00), as_list=True))
         state_optimizer = tf.train.AdamOptimizer(learning_rate)
         try:
             self.root_state_train_op = state_optimizer.minimize(state_loss, var_list=states_params)
@@ -776,10 +771,6 @@ class AgencyCallRoot:
         else:
             return {self.name: None if exclude_root else func(self),
                     "childs" : [c.tree_map(func, False) for c in self.childs]}
-            # might be better to represent the data this way:
-            # return {"name": self.name,
-            #         "result": None if exclude_root else func(self),
-            #         "childs" : [c.tree_map(func, False) for c in self.childs]}
 
 
 class AgencyCall(AgencyCallRoot):
