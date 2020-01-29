@@ -1,0 +1,70 @@
+{
+    "all_body": {
+        "childs": {
+
+            "left_arm": {
+                "policy_model": "PolicyModel([4])",
+                "state_model": "SimpleStateModel(30, 30, 10, input_batchnorm=True)",
+                "critic_model": "SimpleCriticModel(200, 200, input_batchnorm=True)",
+                "readout_goal_model": "DebugReadoutGoalModel()",
+                "readout_state_model": "DebugReadoutStateModel()",
+                "readout_gstate_model": "DebugReadoutGStateModel()",
+                "childs": {
+
+                    "left_elbow": {
+                        "policy_model": "PolicyModel([1])",
+                        "state_model": "SimpleStateModel(10, 10, 1)",
+                        "critic_model": "SimpleCriticModel(200, 200)",
+                        "readout_goal_model": "DebugReadoutGoalModel()",
+                        "readout_state_model": "DebugReadoutStateModel()",
+                        "readout_gstate_model": "DebugReadoutGStateModel()",
+                        "childs": {}
+                    },
+
+                    "left_shoulder": {
+                        "policy_model": "PolicyModel([1])",
+                        "state_model": "SimpleStateModel(10, 10, 1)",
+                        "critic_model": "SimpleCriticModel(200, 200)",
+                        "readout_goal_model": "DebugReadoutGoalModel()",
+                        "readout_state_model": "DebugReadoutStateModel()",
+                        "readout_gstate_model": "DebugReadoutGStateModel()",
+                        "childs": {}
+                    }
+
+                }
+            },
+
+            "right_arm": {
+                "policy_model": "PolicyModel([4])",
+                "state_model": "SimpleStateModel(30, 30, 10, input_batchnorm=True)",
+                "critic_model": "SimpleCriticModel(200, 200, input_batchnorm=True)",
+                "readout_goal_model": "DebugReadoutGoalModel()",
+                "readout_state_model": "DebugReadoutStateModel()",
+                "readout_gstate_model": "DebugReadoutGStateModel()",
+                "childs": {
+
+                    "right_elbow": {
+                        "policy_model": "PolicyModel([1])",
+                        "state_model": "SimpleStateModel(10, 10, 1)",
+                        "critic_model": "SimpleCriticModel(200, 200)",
+                        "readout_goal_model": "DebugReadoutGoalModel()",
+                        "readout_state_model": "DebugReadoutStateModel()",
+                        "readout_gstate_model": "DebugReadoutGStateModel()",
+                        "childs": {}
+                    },
+
+                    "right_shoulder": {
+                        "policy_model": "PolicyModel([1])",
+                        "state_model": "SimpleStateModel(10, 10, 1)",
+                        "critic_model": "SimpleCriticModel(200, 200)",
+                        "readout_goal_model": "DebugReadoutGoalModel()",
+                        "readout_state_model": "DebugReadoutStateModel()",
+                        "readout_gstate_model": "DebugReadoutGStateModel()",
+                        "childs": {}
+                    }
+
+                }
+            }
+        }
+    }
+}
