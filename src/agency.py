@@ -343,7 +343,7 @@ class AgencyRootModel(MultiInputModel):
                         target_smoothing_noise_scale=target_smoothing_noise_scale,
                         batchnorm_training=batchnorm_training)
                      for child in self.childs]
-            ret = AgencyCallRoot(name=self.name, learning_rate=learning_rate, childs=childs)
+            ret = AgencyCallRoot(name=self.name, learning_rate=learning_rate, actor_speed_ratio=actor_speed_ratio, childs=childs)
             # iprint("... done")
         return ret
 
@@ -749,7 +749,7 @@ class AgencyModel(AgencyRootModel):
 
 
 class AgencyCallRoot:
-    def __init__(self, name, learning_rate, childs=[]):
+    def __init__(self, name, learning_rate, actor_speed_ratio, childs=[]):
         self.name = name
         self.childs = [AgencyCall(child) for child in childs]
         ### ACTOR
@@ -765,7 +765,7 @@ class AgencyCallRoot:
         states_params = [item for sublist in states_params for item in sublist]
         # state_loss = sum(self.tree_map(lambda agency_call: agency_call.critic_loss, as_list=True))
         state_loss = - sum(self.tree_map(lambda agency_call: tf.reduce_mean(agency_call.predicted_return_00), as_list=True))
-        state_optimizer = tf.train.AdamOptimizer(learning_rate)
+        state_optimizer = tf.train.AdamOptimizer(learning_rate / actor_speed_ratio)
         try:
             self.root_state_train_op = state_optimizer.minimize(state_loss, var_list=states_params)
         except ValueError as err:
