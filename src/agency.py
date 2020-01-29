@@ -141,6 +141,37 @@ class SimplePolicyModel(MultiInputModel):
             self.batchnorm_vars += self.output_batchnorm.variables
 
 
+class PolicyModel(MultiInputModel):
+    def __init__(self, net_dim, name="policy"):
+        super().__init__(name=name)
+        self.concat0 = layers.Concatenate()
+        if len(net_dim) > 1:
+            self.concat1 = layers.Concatenate()
+        else:
+            self.concat1 = None
+        self.dense_layers = \
+            [layers.Dense(size, activation=tf.nn.relu) for size in net_dim[:-1]] + \
+            [layers.Dense(net_dim[-1], activation=tf.tanh)]
+
+    def my_call(self, state, goal, training=True):
+        ret = self.concat0([state, goal])
+        ret = self.dense_layers[0](ret)
+        if self.concat1 is not None:
+            ret = self.concat1([state, goal, ret])
+        for dense in self.dense_layers[1:]:
+            ret = dense(ret)
+        return ret
+
+    def _set_trainable_weights(self):
+        self._trainable_weights = []
+        for dense in self.dense_layers:
+            self._trainable_weights += dense.trainable_variables
+
+    def _set_batchnorm_op(self):
+        self.batchnorm_op = []
+        self.batchnorm_vars = []
+
+
 class SimpleStateModel(MultiInputModel):
     def __init__(self, l0_size, l1_size, l2_size, input_batchnorm=False, output_batchnorm=True, name="state"):
         super().__init__(name=name)
