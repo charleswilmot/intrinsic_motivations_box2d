@@ -84,22 +84,6 @@ def flatten_placeholder_tree(placeholder_tree):
     return ret
 
 
-to_env_name = {
-    "left_elbow": "Arm1_to_Arm2_Left",
-    "right_elbow": "Arm1_to_Arm2_Right",
-    "left_shoulder": "Ground_to_Arm1_Left",
-    "right_shoulder": "Ground_to_Arm1_Right"
-}
-
-
-def to_action(transition):
-    if not len(transition["childs"]):
-        name = [k for k in transition if k != "childs"][0]
-        return {to_env_name[name]: transition[name]["goal_0"][0, 0]}
-    else:
-        return {k: v for d in [to_action(c) for c in transition["childs"]] for k, v in d.items()}
-
-
 def get_cluster(n_parameter_servers, n_workers):
     spec = {}
     port = get_available_port(2222)
@@ -140,6 +124,20 @@ class Worker:
         self.logdir = logdir
         self.conf = conf
         self.env = environment.Environment.from_conf(self.conf.environment_conf)
+        agency_name = self.conf.worker_conf.agency_conf_path.split("/")[-1]
+        if agency_name in ["debug_agency.txt", "simple_agency.txt", "1_layer_policy.txt", "2_layer_policy.txt"]:
+            self.to_env_name = {
+                "left_elbow": "Arm1_to_Arm2_Left",
+                "right_elbow": "Arm1_to_Arm2_Right",
+                "left_shoulder": "Ground_to_Arm1_Left",
+                "right_shoulder": "Ground_to_Arm1_Right"
+            }
+        elif agency_name in ["one_joint_agency.txt"]:
+            self.to_env_name = {
+                "joint_0": "joint_0"
+            }
+        else:
+            raise ValueError("No agent name to joint name mapping defined.")
 
         self.discount_factor = self.conf.worker_conf.discount_factor
         self.sequence_length = self.conf.worker_conf.sequence_length
@@ -314,7 +312,11 @@ class Worker:
         self.sess = tf.Session(target=self.server.target)
 
     def to_action(self, transition):
-        return to_action(transition)
+        if not len(transition["childs"]):
+            name = [k for k in transition if k != "childs"][0]
+            return {self.to_env_name[name]: transition[name]["goal_0"][0, 0]}
+        else:
+            return {k: v for d in [self.to_action(c) for c in transition["childs"]] for k, v in d.items()}
 
     def add_summary(self, summary, global_step):
         try:
@@ -411,7 +413,7 @@ class Worker:
             # feed_dict feeds root with data from 'state', 'gstate' and 'goal'
             transition_0 = self.sess.run(self.training_behaviour_fetches, feed_dict=feed_dict)
             # set action
-            action = to_action(transition_0)
+            action = self.to_action(transition_0)
             self.env.set_speeds(action)
             # run environment step
             self.env.env_step()
@@ -434,16 +436,27 @@ class Worker:
         n = 5 if n is None else n
         for i in range(n):
             action = {
-                "Arm1_to_Arm2_Left": np.random.uniform(low=-2, high=2),
-                "Ground_to_Arm1_Left": np.random.uniform(low=-3.14, high=3.14),
-                "Arm1_to_Arm2_Right": np.random.uniform(low=-2, high=2),
-                "Ground_to_Arm1_Right": np.random.uniform(low=-3.14, high=3.14)
-            }
+              joint_name: np.random.uniform(low=joint.lowerLimit, high=joint.upperLimit) if joint.limitEnabled else
+                          np.random.uniform(low=-3.14, high=3.14) for joint_name, joint in self.env.joints.items()}
             self.env.set_positions(action)
-            # self.env.set_speeds(action)
             self.env.env_step()
         if _answer:
             self.pipe.send("{} applied {} random actions".format(self.name, n))
+
+    # def randomize_env(self, n=None, _answer=False):
+    #     n = 5 if n is None else n
+    #     for i in range(n):
+    #         action = {
+    #             "Arm1_to_Arm2_Left": np.random.uniform(low=-2, high=2),
+    #             "Ground_to_Arm1_Left": np.random.uniform(low=-3.14, high=3.14),
+    #             "Arm1_to_Arm2_Right": np.random.uniform(low=-2, high=2),
+    #             "Ground_to_Arm1_Right": np.random.uniform(low=-3.14, high=3.14)
+    #         }
+    #         self.env.set_positions(action)
+    #         # self.env.set_speeds(action)
+    #         self.env.env_step()
+    #     if _answer:
+    #         self.pipe.send("{} applied {} random actions".format(self.name, n))
 
     def update_reinforcement_learning(self, stacked_transitions, train_actor=True, train_state=True):
         # stack_transitions as the form :

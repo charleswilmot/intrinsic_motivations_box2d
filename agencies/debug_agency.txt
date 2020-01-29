@@ -6,18 +6,18 @@
                 "policy_model": "DebugPolicyModel()",
                 "state_model": "DebugStateModel()",
                 "critic_model": "DebugCriticModel()",
-                "readout_goal_model": "DebugReadoutGoalModel()",
-                "readout_state_model": "DebugReadoutStateModel()",
-                "readout_gstate_model": "DebugReadoutGStateModel()",
+                "readout_goal_model": "DebugReadoutGoalModel(8)",
+                "readout_state_model": "DebugReadoutStateModel(12)",
+                "readout_gstate_model": "DebugReadoutGStateModel(8)",
                 "childs": {
 
                     "left_elbow": {
                         "policy_model": "DebugPolicyModel()",
                         "state_model": "DebugStateModel()",
                         "critic_model": "DebugCriticModel()",
-                        "readout_goal_model": "DebugReadoutGoalModel()",
-                        "readout_state_model": "DebugReadoutStateModel()",
-                        "readout_gstate_model": "DebugReadoutGStateModel()",
+                        "readout_goal_model": "DebugReadoutGoalModel(8)",
+                        "readout_state_model": "DebugReadoutStateModel(12)",
+                        "readout_gstate_model": "DebugReadoutGStateModel(8)",
                         "childs": {}
                     },
 
@@ -25,9 +25,9 @@
                         "policy_model": "DebugPolicyModel()",
                         "state_model": "DebugStateModel()",
                         "critic_model": "DebugCriticModel()",
-                        "readout_goal_model": "DebugReadoutGoalModel()",
-                        "readout_state_model": "DebugReadoutStateModel()",
-                        "readout_gstate_model": "DebugReadoutGStateModel()",
+                        "readout_goal_model": "DebugReadoutGoalModel(8)",
+                        "readout_state_model": "DebugReadoutStateModel(12)",
+                        "readout_gstate_model": "DebugReadoutGStateModel(8)",
                         "childs": {}
                     }
 
@@ -38,18 +38,18 @@
                 "policy_model": "DebugPolicyModel()",
                 "state_model": "DebugStateModel()",
                 "critic_model": "DebugCriticModel()",
-                "readout_goal_model": "DebugReadoutGoalModel()",
-                "readout_state_model": "DebugReadoutStateModel()",
-                "readout_gstate_model": "DebugReadoutGStateModel()",
+                "readout_goal_model": "DebugReadoutGoalModel(8)",
+                "readout_state_model": "DebugReadoutStateModel(12)",
+                "readout_gstate_model": "DebugReadoutGStateModel(8)",
                 "childs": {
-                
+
                     "right_elbow": {
                         "policy_model": "DebugPolicyModel()",
                         "state_model": "DebugStateModel()",
                         "critic_model": "DebugCriticModel()",
-                        "readout_goal_model": "DebugReadoutGoalModel()",
-                        "readout_state_model": "DebugReadoutStateModel()",
-                        "readout_gstate_model": "DebugReadoutGStateModel()",
+                        "readout_goal_model": "DebugReadoutGoalModel(8)",
+                        "readout_state_model": "DebugReadoutStateModel(12)",
+                        "readout_gstate_model": "DebugReadoutGStateModel(8)",
                         "childs": {}
                     },
 
@@ -57,12 +57,12 @@
                         "policy_model": "DebugPolicyModel()",
                         "state_model": "DebugStateModel()",
                         "critic_model": "DebugCriticModel()",
-                        "readout_goal_model": "DebugReadoutGoalModel()",
-                        "readout_state_model": "DebugReadoutStateModel()",
-                        "readout_gstate_model": "DebugReadoutGStateModel()",
+                        "readout_goal_model": "DebugReadoutGoalModel(8)",
+                        "readout_state_model": "DebugReadoutStateModel(12)",
+                        "readout_gstate_model": "DebugReadoutGStateModel(8)",
                         "childs": {}
                     }
-                
+
                 }
             }
         }

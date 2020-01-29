@@ -6,18 +6,18 @@
                 "policy_model": "SimplePolicyModel(30, 30, 4, input_batchnorm=False, output_batchnorm=False)",
                 "state_model": "SimpleStateModel(30, 30, 10, input_batchnorm=True)",
                 "critic_model": "SimpleCriticModel(200, 200, input_batchnorm=True)",
-                "readout_goal_model": "DebugReadoutGoalModel()",
-                "readout_state_model": "DebugReadoutStateModel()",
-                "readout_gstate_model": "DebugReadoutGStateModel()",
+                "readout_goal_model": "DebugReadoutGoalModel(8)",
+                "readout_state_model": "DebugReadoutStateModel(12)",
+                "readout_gstate_model": "DebugReadoutGStateModel(8)",
                 "childs": {
 
                     "left_elbow": {
                         "policy_model": "SimplePolicyModel(30, 30, 1, input_batchnorm=False, output_batchnorm=False)",
                         "state_model": "SimpleStateModel(10, 10, 1)",
                         "critic_model": "SimpleCriticModel(200, 200)",
-                        "readout_goal_model": "DebugReadoutGoalModel()",
-                        "readout_state_model": "DebugReadoutStateModel()",
-                        "readout_gstate_model": "DebugReadoutGStateModel()",
+                        "readout_goal_model": "DebugReadoutGoalModel(8)",
+                        "readout_state_model": "DebugReadoutStateModel(12)",
+                        "readout_gstate_model": "DebugReadoutGStateModel(8)",
                         "childs": {}
                     },
 
@@ -25,9 +25,9 @@
                         "policy_model": "SimplePolicyModel(30, 30, 1, input_batchnorm=False, output_batchnorm=False)",
                         "state_model": "SimpleStateModel(10, 10, 1)",
                         "critic_model": "SimpleCriticModel(200, 200)",
-                        "readout_goal_model": "DebugReadoutGoalModel()",
-                        "readout_state_model": "DebugReadoutStateModel()",
-                        "readout_gstate_model": "DebugReadoutGStateModel()",
+                        "readout_goal_model": "DebugReadoutGoalModel(8)",
+                        "readout_state_model": "DebugReadoutStateModel(12)",
+                        "readout_gstate_model": "DebugReadoutGStateModel(8)",
                         "childs": {}
                     }
 
@@ -38,18 +38,18 @@
                 "policy_model": "SimplePolicyModel(30, 30, 4, input_batchnorm=False, output_batchnorm=False)",
                 "state_model": "SimpleStateModel(30, 30, 10, input_batchnorm=True)",
                 "critic_model": "SimpleCriticModel(200, 200, input_batchnorm=True)",
-                "readout_goal_model": "DebugReadoutGoalModel()",
-                "readout_state_model": "DebugReadoutStateModel()",
-                "readout_gstate_model": "DebugReadoutGStateModel()",
+                "readout_goal_model": "DebugReadoutGoalModel(8)",
+                "readout_state_model": "DebugReadoutStateModel(12)",
+                "readout_gstate_model": "DebugReadoutGStateModel(8)",
                 "childs": {
 
                     "right_elbow": {
                         "policy_model": "SimplePolicyModel(30, 30, 1, input_batchnorm=False, output_batchnorm=False)",
                         "state_model": "SimpleStateModel(10, 10, 1)",
                         "critic_model": "SimpleCriticModel(200, 200)",
-                        "readout_goal_model": "DebugReadoutGoalModel()",
-                        "readout_state_model": "DebugReadoutStateModel()",
-                        "readout_gstate_model": "DebugReadoutGStateModel()",
+                        "readout_goal_model": "DebugReadoutGoalModel(8)",
+                        "readout_state_model": "DebugReadoutStateModel(12)",
+                        "readout_gstate_model": "DebugReadoutGStateModel(8)",
                         "childs": {}
                     },
 
@@ -57,9 +57,9 @@
                         "policy_model": "SimplePolicyModel(30, 30, 1, input_batchnorm=False, output_batchnorm=False)",
                         "state_model": "SimpleStateModel(10, 10, 1)",
                         "critic_model": "SimpleCriticModel(200, 200)",
-                        "readout_goal_model": "DebugReadoutGoalModel()",
-                        "readout_state_model": "DebugReadoutStateModel()",
-                        "readout_gstate_model": "DebugReadoutGStateModel()",
+                        "readout_goal_model": "DebugReadoutGoalModel(8)",
+                        "readout_state_model": "DebugReadoutStateModel(12)",
+                        "readout_gstate_model": "DebugReadoutGStateModel(8)",
                         "childs": {}
                     }
 

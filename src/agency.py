@@ -264,18 +264,18 @@ class DebugReadoutModelBase(MultiInputModel):
 
 
 class DebugReadoutGoalModel(DebugReadoutModelBase):
-    def __init__(self):
-        super().__init__(8, "readout_goal")
+    def __init__(self, out_size):
+        super().__init__(out_size, "readout_goal")
 
 
 class DebugReadoutStateModel(DebugReadoutModelBase):
-    def __init__(self):
-        super().__init__(12, "readout_state")
+    def __init__(self, out_size):
+        super().__init__(out_size, "readout_state")
 
 
 class DebugReadoutGStateModel(DebugReadoutModelBase):
-    def __init__(self):
-        super().__init__(8, "readout_gstate")
+    def __init__(self, out_size):
+        super().__init__(out_size, "readout_gstate")
 
 
 class AgencyRootModel(MultiInputModel):
