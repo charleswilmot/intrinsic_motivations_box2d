@@ -66,13 +66,13 @@ if __name__ == "__main__":
         '-se', '--save-every',
         type=int,
         help="Save every N updates.",
-        default=200000
+        default=100000
     )
     parser.add_argument(
         '-nt', '--n-trajectories',
         type=int,
         help="Number of trajectories to be simulated.",
-        default=10000000
+        default=500000
     )
     parser.add_argument(
         '-sl', '--sequence-length',
@@ -84,7 +84,7 @@ if __name__ == "__main__":
         '-u', '--updates-per-episode',
         type=int,
         help="Number of updates per gathered trajectory.",
-        default=10
+        default=1
     )
     parser.add_argument(
         '-b', '--batch-size',
