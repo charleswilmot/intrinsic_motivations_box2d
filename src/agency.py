@@ -6,7 +6,7 @@ import json
 
 
 def d(a, b):
-    return tf.reduce_sum((a - b) ** 2, axis=-1)
+    return tf.sqrt(tf.reduce_sum((a - b) ** 2, axis=-1))
 
 
 class FixKerasIssue(dict):
@@ -457,8 +457,9 @@ class AgencyModel(AgencyRootModel):
                 shape=tensors["gstate_1"].get_shape()
             )
             ### REWARD
-            tensors["mean_distance_to_goal"] = tf.reduce_mean(d(parent_goal_0, parent_gstate_0))
-            tensors["reward"] = tf.reshape(d(parent_goal_0, parent_gstate_0) - d(parent_goal_0, parent_gstate_1), (-1, 1)) * np.sqrt(1 - discount_factor ** 2)
+            tensors["mean_distance_to_goal"] = tf.reduce_mean(d(parent_goal_0, parent_gstate_1))
+            # tensors["reward"] = tf.reshape(d(parent_goal_0, parent_gstate_0) - d(parent_goal_0, parent_gstate_1), (-1, 1)) * np.sqrt(1 - discount_factor ** 2)
+            tensors["reward"] = - tf.reshape(d(parent_goal_0, parent_gstate_1), (-1, 1)) * np.sqrt(1 - discount_factor ** 2)
             ### CRITIC DEFINITION
             # CRITIC 0
             tensors["predicted_return_00"] = self.critic_0_model(
