@@ -498,7 +498,7 @@ class AgencyModel(AgencyRootModel):
             tensors["predicted_return_00"] = self.critic_0_model(
                 parent_state_0,
                 parent_goal_0,
-                tensors["goal_0"],  # TODO very important. Mistake here. Should be "placeholder_goal_0" instead. (= from buffer / with noise)
+                tensors["placeholder_goal_0"],
                 training=batchnorm_training
             )
             # useless
@@ -525,7 +525,7 @@ class AgencyModel(AgencyRootModel):
             tensors["predicted_return_01"] = self.critic_1_model(
                 parent_state_0,
                 parent_goal_0,
-                tensors["goal_0"],  # TODO very important. Mistake here. Should be "placeholder_goal_0" instead. (= from buffer / with noise)
+                tensors["placeholder_goal_0"],
                 training=batchnorm_training
             )
             # useless
