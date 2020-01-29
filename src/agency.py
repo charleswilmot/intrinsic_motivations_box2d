@@ -413,18 +413,20 @@ class AgencyModel(AgencyRootModel):
             )
             if behaviour_noise_scale:
                 tensors["goal_0"] += tf.random_normal(shape=tf.shape(tensors["goal_0"]), stddev=behaviour_noise_scale)
+            # useless
             tensors["goal_1"] = self.policy_model(
                 parent_state_1,
                 parent_goal_0,  # assumes that the goal has not changed
                 training=False
             )
+            # useless
             tensors["goal_0_target"] = self.target_policy_model(
                 parent_state_0,
                 parent_goal_0,
                 training=False
             )
             tensors["goal_1_target"] = self.target_policy_model(
-                parent_state_1,
+                parent_state_1,  # TODO important: add a target state network. Pass the target_states and target_goals through the tree. Use the target_state_1 and target_goal_0 here.
                 parent_goal_0,  # assumes that the goal has not changed
                 training=False
             )
@@ -496,15 +498,17 @@ class AgencyModel(AgencyRootModel):
             tensors["predicted_return_00"] = self.critic_0_model(
                 parent_state_0,
                 parent_goal_0,
-                tensors["goal_0"],
+                tensors["goal_0"],  # TODO very important. Mistake here. Should be "placeholder_goal_0" instead. (= from buffer / with noise)
                 training=batchnorm_training
             )
+            # useless
             tensors["predicted_return_10"] = self.critic_0_model(
                 parent_state_1,
                 parent_goal_0,  # assumes that the goal has not changed
                 tensors["goal_1"],  # assumes that the goal has not changed
                 training=False
             )
+            # useless
             tensors["predicted_return_00_target"] = self.target_critic_0_model(
                 parent_state_0,
                 parent_goal_0,
@@ -521,15 +525,17 @@ class AgencyModel(AgencyRootModel):
             tensors["predicted_return_01"] = self.critic_1_model(
                 parent_state_0,
                 parent_goal_0,
-                tensors["goal_0"],
+                tensors["goal_0"],  # TODO very important. Mistake here. Should be "placeholder_goal_0" instead. (= from buffer / with noise)
                 training=batchnorm_training
             )
+            # useless
             tensors["predicted_return_11"] = self.critic_1_model(
                 parent_state_1,
                 parent_goal_0,  # assumes that the goal has not changed
                 tensors["goal_1"],  # assumes that the goal has not changed
                 training=False
             )
+            # useless
             tensors["predicted_return_01_target"] = self.target_critic_1_model(
                 parent_state_0,
                 parent_goal_0,
