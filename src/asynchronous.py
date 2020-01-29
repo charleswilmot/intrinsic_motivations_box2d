@@ -472,13 +472,14 @@ class Worker:
         if ret["global_step"] % 100 == 0:
             print("{} finished update number {}".format(self.name, ret["global_step"]))
         self._local_step += 1
-        if (ret["global_step"] < 20000 and ret["global_step"] % 100 == 0) or (ret["global_step"] >= 20000 and ret["global_step"] % 500 == 0):
+        global_step = ret["global_step"]
+        if (global_step < 20000 and global_step % 100 == 0) or (global_step >= 20000 and global_step % 500 == 0):
             feed_dict = self.state_feed_dict(stacked_transitions)
             self.add_summary(
                 self.sess.run(self.agency_update.root_summary_op, feed_dict=feed_dict),
-                global_step=ret["global_step"]
+                global_step=global_step
             )
-        return ret["global_step"]
+        return global_step
 
     def _get_new_placeholder_tree(self):
         return placeholder_tree_copy(self._placeholder_tree_template)
@@ -494,6 +495,7 @@ class Worker:
             self.parent_goal_0: stacked_transitions["all_body"]["root_goal_0"],
             self.parent_state_0: stacked_transitions["all_body"]["root_state_0"],
             self.parent_gstate_0: stacked_transitions["all_body"]["root_gstate_0"],
+            # self.parent_goal_1: stacked_transitions["all_body"]["root_goal_1"],
             self.parent_state_1: stacked_transitions["all_body"]["root_state_1"],
             self.parent_gstate_1: stacked_transitions["all_body"]["root_gstate_1"]
         }
