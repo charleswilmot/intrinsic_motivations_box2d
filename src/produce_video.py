@@ -31,4 +31,4 @@ if __name__ == "__main__":
     with TemporaryDirectory() as tmppath:
         with Experiment(1, 1, tmppath + "/replay", conf, display_dpi=3) as experiment:
             experiment.restore_model(checkpoint_path)
-            experiment.save_video(args.name + ".mp4", path=experiment_path + "/video", length_in_sec=120)
+            experiment.save_video(args.name + ".mp4", path=experiment_path + "/video", length_in_sec=60 * 10)
