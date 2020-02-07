@@ -191,7 +191,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '-v', '--video',
         type=bool_helper,
-        default=True,
+        default=False,
         help="Should generate videos?"
     )
     parser.add_argument(
