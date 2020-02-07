@@ -623,6 +623,7 @@ class AgencyModel(AgencyRootModel):
                 -tf.reduce_mean(tensors["predicted_return_00"], axis=0),
                 var_list=self.policy_model.trainable_variables
             )
+            tensors["q_function_gradient"] = tf.gradients(tensors["predicted_return_00"], tensors["placeholder_goal_0"])[0]
             tensors["batchnorm_train_op"] = \
                 self.policy_model.batchnorm_op + \
                 self.critic_0_model.batchnorm_op + \
@@ -723,6 +724,24 @@ class AgencyModel(AgencyRootModel):
                     "/goal_max/{}".format(self.name),
                     tf.reduce_max(tensors["goal_0"])
                 )
+                mean, var = tf.nn.moments(tensors["q_function_gradient"], axes=[0, 1])
+                std = tf.sqrt(var)
+                mean_gradient = tf.summary.scalar(
+                    "/gradient_mean/{}".format(self.name),
+                    mean
+                )
+                std_gradient = tf.summary.scalar(
+                    "/gradient_std/{}".format(self.name),
+                    std
+                )
+                min_gradient = tf.summary.scalar(
+                    "/gradient_min/{}".format(self.name),
+                    tf.reduce_min(tensors["q_function_gradient"])
+                )
+                max_gradient = tf.summary.scalar(
+                    "/gradient_max/{}".format(self.name),
+                    tf.reduce_max(tensors["q_function_gradient"])
+                )
                 # activity
                 goal_histogram = tf.summary.histogram(
                     "/goal/{}".format(self.name),
@@ -731,6 +750,10 @@ class AgencyModel(AgencyRootModel):
                 reward_histogram = tf.summary.histogram(
                     "/reward/{}".format(self.name),
                     tensors["reward"]
+                )
+                gradient_histogram = tf.summary.histogram(
+                    "/gradient/{}".format(self.name),
+                    tensors["q_function_gradient"]
                 )
                 # weights
                 critic_1_histograms = [
@@ -761,7 +784,8 @@ class AgencyModel(AgencyRootModel):
                     mean_critic_1_loss_summary, mean_critic_2_loss_summary,
                     mean_reward_summary, goal_histogram, std_reward_summary,
                     min_reward_summary, max_reward_summary, mean_goal, std_goal,
-                    min_goal, max_goal, mean_distance_to_goal_summary, reward_histogram
+                    min_goal, max_goal, mean_distance_to_goal_summary, reward_histogram,
+                    gradient_histogram, mean_gradient, std_gradient, min_gradient, max_gradient,
                     ] +
                     critic_1_histograms + critic_2_histograms + actor_histogram + state_histogram
                 )
