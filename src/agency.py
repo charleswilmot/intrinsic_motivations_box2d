@@ -526,6 +526,11 @@ class AgencyModel(AgencyRootModel):
             )
             ### REWARD
             tensors["mean_distance_to_goal"] = tf.reduce_mean(d(parent_goal_0, parent_gstate_1))
+            # tensors["reward"] = tf.exp(
+            #     -tf.reshape(d(parent_goal_0, parent_gstate_1), (-1, 1)) ** 2 /
+            #     0.12  # 20deg std
+            # ) * np.sqrt(1 - discount_factor ** 2)
+            # tensors["reward"] = tf.cast(tf.reshape(d(parent_goal_0, parent_gstate_1), (-1, 1)) < 0.01, dtype=tf.float32) * np.sqrt(1 - discount_factor ** 2)
             # tensors["reward"] = tf.reshape(d(parent_goal_0, parent_gstate_0) - d(parent_goal_0, parent_gstate_1), (-1, 1)) * np.sqrt(1 - discount_factor ** 2)
             tensors["reward"] = - tf.reshape(d(parent_goal_0, parent_gstate_1), (-1, 1)) * np.sqrt(1 - discount_factor ** 2)
             ### CRITIC DEFINITION
