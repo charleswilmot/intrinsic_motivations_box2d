@@ -493,7 +493,7 @@ class Worker:
             print("{} finished update number {}".format(self.name, ret["global_step"]))
         self._local_step += 1
         global_step = ret["global_step"]
-        if (global_step < 20000 and global_step % 100 == 0) or (global_step >= 20000 and global_step % 500 == 0):
+        if (global_step < 20000 and global_step % 100 == 0) or (global_step >= 20000 and global_step % 500 == 0) or (self._local_step < 20 and global_step % 5 == 0):
             feed_dict = self.state_feed_dict(stacked_transitions)
             self.add_summary(
                 self.sess.run(self.agency_update.root_summary_op, feed_dict=feed_dict),
