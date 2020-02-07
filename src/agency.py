@@ -53,50 +53,6 @@ class MultiInputModel(layers.Layer):
         pass
 
 
-class DebugPolicyModel(MultiInputModel):
-    def __init__(self, name="policy"):
-        super().__init__(name=name)
-        self.concat = layers.Concatenate()
-        self.dense = layers.Dense(10)
-        self.batchnorm = tf.layers.BatchNormalization(scale=False, center=False)
-
-    def my_call(self, state, goal, training=True):
-        ret = self.concat([state, goal])
-        ret = self.dense(ret)
-        ret = self.batchnorm(ret, training=training)
-        return ret
-
-    def _set_trainable_weights(self):
-        self._trainable_weights = self.dense.trainable_variables
-
-
-class DebugStateModel(MultiInputModel):
-    def __init__(self, name="state"):
-        super().__init__(name=name)
-        self.dense = layers.Dense(10)
-
-    def my_call(self, state):
-        return self.dense(state)
-
-    def _set_trainable_weights(self):
-        self._trainable_weights = self.dense.trainable_variables
-
-
-class DebugCriticModel(MultiInputModel):
-    def __init__(self, name="critic"):
-        super().__init__(name=name)
-        self.concat = layers.Concatenate()
-        self.dense = layers.Dense(1)
-
-    def my_call(self, state, goal, action):
-        ret = self.concat([state, goal, action])
-        ret = self.dense(ret)
-        return ret
-
-    def _set_trainable_weights(self):
-        self._trainable_weights = self.dense.trainable_variables
-
-
 class SimplePolicyModel(MultiInputModel):
     def __init__(self, l0_size, l1_size, l2_size, input_batchnorm=False, output_batchnorm=True, name="policy"):
         super().__init__(name=name)
