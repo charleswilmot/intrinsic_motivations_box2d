@@ -168,6 +168,43 @@ class SimpleStateModel(MultiInputModel):
             self.batchnorm_vars += self.output_batchnorm.variables
 
 
+class StateModel(MultiInputModel):
+    def __init__(self, net_dim, input_batchnorm=False, output_batchnorm=True, name="state"):
+        super().__init__(name=name)
+        self.dense_layers = [layers.Dense(size, activation=tf.nn.relu) for size in net_dim]
+        self._input_batchnorm = input_batchnorm
+        self._output_batchnorm = output_batchnorm
+        if input_batchnorm:
+            self.input_batchnorm = tf.layers.BatchNormalization(scale=False, center=False)
+        if output_batchnorm:
+            self.output_batchnorm = tf.layers.BatchNormalization(scale=False, center=False)
+
+    def my_call(self, state, training=True):
+        ret = state
+        if self._input_batchnorm:
+            ret = self.input_batchnorm(ret, training=training)
+        for dense in self.dense_layers:
+            ret = dense(ret)
+        if self._output_batchnorm:
+            ret = self.output_batchnorm(ret, training=training)
+        return ret
+
+    def _set_trainable_weights(self):
+        self._trainable_weights = []
+        for dense in self.dense_layers:
+            self._trainable_weights += dense.trainable_variables
+
+    def _set_batchnorm_op(self):
+        self.batchnorm_op = []
+        self.batchnorm_vars = []
+        if self._input_batchnorm:
+            self.batchnorm_op.append(self.input_batchnorm.updates)
+            self.batchnorm_vars += self.input_batchnorm.variables
+        if self._output_batchnorm:
+            self.batchnorm_op.append(self.output_batchnorm.updates)
+            self.batchnorm_vars += self.output_batchnorm.variables
+
+
 class SimpleCriticModel(MultiInputModel):
     def __init__(self, l0_size, l1_size, input_batchnorm=False, name="critic"):
         super().__init__(name=name)
@@ -195,6 +232,48 @@ class SimpleCriticModel(MultiInputModel):
         self._trainable_weights += self.dense0.trainable_variables
         self._trainable_weights += self.dense1.trainable_variables
         self._trainable_weights += self.dense2.trainable_variables
+
+    def _set_batchnorm_op(self):
+        self.batchnorm_op = []
+        self.batchnorm_vars = []
+        if self._input_batchnorm:
+            self.batchnorm_op.append(self.input_batchnorm.updates)
+            self.batchnorm_vars += self.input_batchnorm.variables
+
+
+class CriticModel(MultiInputModel):
+    def __init__(self, net_dim, input_batchnorm=False, name="critic"):
+        super().__init__(name=name)
+        self.concat0 = layers.Concatenate()
+        if len(net_dim) > 1:
+            self.concat1 = layers.Concatenate()
+        else:
+            self.concat1 = None
+        self._input_batchnorm = input_batchnorm
+        if input_batchnorm:
+            self.input_batchnorm = tf.layers.BatchNormalization(scale=False, center=False)
+        self.dense_layers = [layers.Dense(
+            size,
+            activation=tf.tanh,
+            kernel_initializer=tf.contrib.layers.variance_scaling_initializer()
+            ) for size in net_dim[:-1]] + \
+            [layers.Dense(net_dim[-1], activation=None)]
+
+    def my_call(self, state, goal, action, training=True):
+        ret = self.concat0([state, goal, action])
+        if self._input_batchnorm:
+            ret = self.input_batchnorm(ret, training=training)
+        ret = self.dense_layers[0](ret)
+        if self.concat1 is not None:
+            ret = self.concat1([state, goal, action, ret])
+        for dense in self.dense_layers[1:]:
+            ret = dense(ret)
+        return ret
+
+    def _set_trainable_weights(self):
+        self._trainable_weights = []
+        for dense in self.dense_layers:
+            self._trainable_weights += dense.trainable_variables
 
     def _set_batchnorm_op(self):
         self.batchnorm_op = []
