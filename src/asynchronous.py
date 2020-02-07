@@ -125,14 +125,21 @@ class Worker:
         self.conf = conf
         self.env = environment.Environment.from_conf(self.conf.environment_conf)
         agency_name = self.conf.worker_conf.agency_conf_path.split("/")[-1]
-        if agency_name in ["debug_agency.txt", "simple_agency.txt", "1_layer_policy.txt", "2_layer_policy.txt"]:
+        if agency_name in \
+                ["debug_agency.txt",
+                 "simple_agency.txt",
+                 "1_layer_policy.txt",
+                 "2_layer_policy.txt"]:
             self.to_env_name = {
                 "left_elbow": "Arm1_to_Arm2_Left",
                 "right_elbow": "Arm1_to_Arm2_Right",
                 "left_shoulder": "Ground_to_Arm1_Left",
                 "right_shoulder": "Ground_to_Arm1_Right"
             }
-        elif agency_name in ["one_joint_agency.txt"]:
+        elif agency_name in \
+                ["one_joint_agency.txt",
+                 "one_joint_agency_shallow.txt",
+                 "one_joint_2_levels.txt"]:
             self.to_env_name = {
                 "joint_0": "joint_0"
             }
