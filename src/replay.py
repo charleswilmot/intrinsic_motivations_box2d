@@ -28,6 +28,8 @@ if __name__ == "__main__":
     with open(experiment_path + "/conf/conf.pkl", "rb") as f:
         conf = pickle.load(f)
 
+    conf.worker_conf.sequence_length = 128
+
     with TemporaryDirectory() as tmppath:
         with Experiment(1, 1, tmppath + "/replay", conf, display_dpi=3) as experiment:
             experiment.restore_model(checkpoint_path)
