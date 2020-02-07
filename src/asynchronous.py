@@ -538,10 +538,24 @@ class Worker:
 
 
 def collect_summaries(queue, path):
+    total_time_getting = 0
+    total_time_writing = 0
+    last_time_printing = time.time()
     with tf.summary.FileWriter(path) as writer:
         while True:
+            t0 = time.time()
             summary, global_step = queue.get()
+            t1 = time.time()
             writer.add_summary(summary, global_step=global_step)
+            t2 = time.time()
+            total_time_getting += t1 - t0
+            total_time_writing += t2 - t1
+            if t2 - last_time_printing > 120:
+                total = total_time_getting + total_time_writing
+                print("SUMMARY COLLECTOR: {:.2f}% getting, {:.2f}% writing. Size: {}".format(
+                    100 * total_time_getting / total, 100 * total_time_writing / total, queue.qsize())
+                )
+                last_time_printing = t2
 
 
 class Experiment:
