@@ -125,27 +125,6 @@ class Worker:
         self.conf = conf
         self.env = environment.Environment.from_conf(self.conf.environment_conf)
         agency_name = self.conf.worker_conf.agency_conf_path.split("/")[-1]
-        if agency_name in \
-                ["debug_agency.txt",
-                 "simple_agency.txt",
-                 "1_layer_policy.txt",
-                 "2_layer_policy.txt"]:
-            self.to_env_name = {
-                "left_elbow": "Arm1_to_Arm2_Left",
-                "right_elbow": "Arm1_to_Arm2_Right",
-                "left_shoulder": "Ground_to_Arm1_Left",
-                "right_shoulder": "Ground_to_Arm1_Right"
-            }
-        elif agency_name in \
-                ["one_joint_agency.txt",
-                 "one_joint_agency_shallow.txt",
-                 "one_joint_2_levels.txt"]:
-            self.to_env_name = {
-                "joint_0": "joint_0"
-            }
-        else:
-            raise ValueError("No agent name to joint name mapping defined.")
-
         self.discount_factor = self.conf.worker_conf.discount_factor
         self.sequence_length = self.conf.worker_conf.sequence_length
         self.replay_buffer_size = self.conf.worker_conf.buffer_size
@@ -321,7 +300,7 @@ class Worker:
     def to_action(self, transition):
         if not len(transition["childs"]):
             name = [k for k in transition if k != "childs"][0]
-            return {self.to_env_name[name]: transition[name]["goal_0"][0, 0]}
+            return {name: transition[name]["goal_0"][0, 0]}
         else:
             return {k: v for d in [self.to_action(c) for c in transition["childs"]] for k, v in d.items()}
 
@@ -466,10 +445,10 @@ class Worker:
     #     n = 5 if n is None else n
     #     for i in range(n):
     #         action = {
-    #             "Arm1_to_Arm2_Left": np.random.uniform(low=-2, high=2),
-    #             "Ground_to_Arm1_Left": np.random.uniform(low=-3.14, high=3.14),
-    #             "Arm1_to_Arm2_Right": np.random.uniform(low=-2, high=2),
-    #             "Ground_to_Arm1_Right": np.random.uniform(low=-3.14, high=3.14)
+    #             "left_elbow": np.random.uniform(low=-2, high=2),
+    #             "left_shoulder": np.random.uniform(low=-3.14, high=3.14),
+    #             "right_elbow": np.random.uniform(low=-2, high=2),
+    #             "right_shoulder": np.random.uniform(low=-3.14, high=3.14)
     #         }
     #         self.env.set_positions(action)
     #         # self.env.set_speeds(action)

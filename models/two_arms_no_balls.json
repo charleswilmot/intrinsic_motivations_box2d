@@ -469,7 +469,7 @@
     ],
     "joint": [
       {
-          "name": "Arm1_to_Arm2_Left",
+          "name": "left_elbow",
           "type": "revolute",
           "bodyA": 1,
           "bodyB": 2,
@@ -492,7 +492,7 @@
           "enableMotor": true
       },
       {
-          "name": "Ground_to_Arm1_Left",
+          "name": "left_shoulder",
           "type": "revolute",
           "bodyA": 0,
           "bodyB": 1,
@@ -514,7 +514,7 @@
           "enableMotor": true
       },
       {
-          "name": "Arm1_to_Arm2_Right",
+          "name": "right_elbow",
           "type": "revolute",
           "bodyA": 4,
           "bodyB": 5,
@@ -537,7 +537,7 @@
           "enableMotor": true
       },
       {
-          "name": "Ground_to_Arm1_Right",
+          "name": "right_shoulder",
           "type": "revolute",
           "bodyA": 3,
           "bodyB": 4,

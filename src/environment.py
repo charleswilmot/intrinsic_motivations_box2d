@@ -403,10 +403,10 @@ if __name__ == "__main__":
 
     for i in range(1000):
         actions = {
-            "Arm1_to_Arm2_Left": np.random.uniform(-2.3, 2.3),
-            "Ground_to_Arm1_Left": np.random.uniform(-3.14, 3.14),
-            "Arm1_to_Arm2_Right": np.random.uniform(-2.3, 2.3),
-            "Ground_to_Arm1_Right": np.random.uniform(-3.14, 3.14)
+            "left_elbow": np.random.uniform(-2.3, 2.3),
+            "left_shoulder": np.random.uniform(-3.14, 3.14),
+            "right_elbow": np.random.uniform(-2.3, 2.3),
+            "right_shoulder": np.random.uniform(-3.14, 3.14)
         }
         env.set_positions(actions)
         for i in range(1000):
