@@ -450,6 +450,18 @@ class Worker:
         if _answer:
             self.pipe.send("{} applied {} random actions".format(self.name, n))
 
+    def fill_goal_buffer(self):
+        for i in range(1000):
+            print(i, end="\r")
+            action = {
+              joint_name: np.random.uniform(low=joint.lowerLimit, high=joint.upperLimit) if joint.limitEnabled else
+                          np.random.uniform(low=-3.14, high=3.14) for joint_name, joint in self.env.joints.items()}
+            self.env.set_positions(action)
+            self.env.env_step()
+            self.goals_buffer.register_one(self.get_gstate()[0], self.env.ploting_data)
+        print("")
+        self.pipe.send("{} filled goal buffer".format(self.name))
+
     # def randomize_env(self, n=None, _answer=False):
     #     n = 5 if n is None else n
     #     for i in range(n):
@@ -674,6 +686,12 @@ class Experiment:
     def randomize_env(self, n=None):
         for p in self.here_worker_pipes:
             p.send(("randomize_env", n, True))
+        for p in self.here_worker_pipes:
+            p.recv()
+
+    def fill_goal_buffer(self):
+        for p in self.here_worker_pipes:
+            p.send(("fill_goal_buffer", ))
         for p in self.here_worker_pipes:
             p.recv()
 

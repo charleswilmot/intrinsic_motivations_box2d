@@ -180,7 +180,7 @@ class Window(QtGui.QMainWindow):
         self._goal_1_widget = EnvironmentWidget(*env.renderer._x_lim, *env.renderer._y_lim, self._central_widget)
         self._environment_widget = EnvironmentWidget(*env.renderer._x_lim, *env.renderer._y_lim, self._central_widget)
         self._agents = self._create_agents_widget(dummy_transition, discount_factor)
-        self._agents[0]._distance.setYRange(-1, 10)
+        self._agents[0]._distance.setYRange(-1, 2)
         [a._distance.setYRange(-0.1, 1) for a in self._agents[1:]]
         self._layout = QtGui.QGridLayout(self._central_widget)
         self._layout.addWidget(self._goal_0_widget, 0, 0, 1, 1)
