@@ -133,7 +133,7 @@ class SimpleStateModel(MultiInputModel):
         super().__init__(name=name)
         self.dense0 = layers.Dense(l0_size, activation=tf.nn.relu)
         self.dense1 = layers.Dense(l1_size, activation=tf.nn.relu)
-        self.dense2 = layers.Dense(l2_size, activation=tf.nn.relu)
+        self.dense2 = layers.Dense(l2_size, activation=tf.tanh)
         self._input_batchnorm = input_batchnorm
         self._output_batchnorm = output_batchnorm
         if input_batchnorm:
