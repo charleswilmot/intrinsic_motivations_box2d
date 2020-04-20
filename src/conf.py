@@ -22,7 +22,7 @@ class ConfRoot:
 class WorkerConf(ConfRoot):
     def __init__(self, discount_factor, sequence_length, learning_rate, actor_speed_ratio,
                        train_actor_every, train_state_every,
-                       buffer_size, updates_per_episode, batch_size,
+                       buffer_size, updates_per_episode, time_scale_factor, batch_size,
                        tau, behaviour_noise_scale, target_smoothing_noise_scale,
                        goal_buffer_size,
                        agency_conf_path):
@@ -34,6 +34,7 @@ class WorkerConf(ConfRoot):
         self.train_state_every = train_state_every
         self.buffer_size = buffer_size
         self.updates_per_episode = updates_per_episode
+        self.time_scale_factor = time_scale_factor
         self.batch_size = batch_size
         self.tau = tau
         self.behaviour_noise_scale = behaviour_noise_scale
@@ -51,6 +52,7 @@ class WorkerConf(ConfRoot):
                           args.train_state_every,
                           args.buffer_size,
                           args.updates_per_episode,
+                          args.time_scale_factor,
                           args.batch_size,
                           args.tau,
                           args.behaviour_noise_scale,

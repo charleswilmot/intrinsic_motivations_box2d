@@ -14,76 +14,6 @@ import agency
 from goal_buffer import GoalBuffer
 
 
-def pprint(tree, _indent=0):
-    for key in tree:
-        if key == "childs":
-            pprint(tree["childs"], _indent=_indent + 4)
-        else:
-            print(" " * _indent + "{}".format(key))
-
-
-def merge_before_after(transition_0, transition_1):
-    ret = {}
-    for key in transition_0:
-        if key == "childs":
-            merged_childs = [merge_before_after(t0, t1) for t0, t1 in zip(transition_0[key], transition_1[key])]
-            ret[key] = merged_childs
-        else:
-            merged_0 = transition_0[key]
-            merged_1 = transition_1[key]
-            for subkey in list(merged_0):
-                merged_0[subkey.replace("0", "1")] = merged_1[subkey]
-            ret[key] = merged_0
-    return ret
-
-
-def stack_transitions(transitions):
-    ret = {}
-    transition = transitions[0]
-    for key in transition:
-        if key == "childs":
-            stacked_childs = [stack_transitions([t[key][i] for t in transitions]) for i in range(len(transition[key]))]
-            ret[key] = stacked_childs
-        else:
-            ret[key] = {}
-            subret = ret[key]
-            stacked = transition[key]
-            for subkey in stacked:
-                subret[subkey] = np.concatenate([t[key][subkey] for t in transitions], axis=0)
-    return ret
-
-
-def placeholder_tree_copy(placeholder_tree):
-    ret = {}
-    for key in placeholder_tree:
-        if key == "childs":
-            ret[key] = [placeholder_tree_copy(c) for c in placeholder_tree[key]]
-        else:
-            ret[key] = placeholder_tree[key].copy()
-    return ret
-
-
-def fill_placeholder_tree(placeholder_tree, stacked_transitions):
-    for key in placeholder_tree:
-        if key == "childs":
-            for placeholder_tree_child, stacked_transitions_child in zip(placeholder_tree[key], stacked_transitions[key]):
-                fill_placeholder_tree(placeholder_tree_child, stacked_transitions_child)
-        else:
-            for placeholder, val in placeholder_tree[key].items():
-                placeholder_tree[key][placeholder] = stacked_transitions[key][val]
-
-
-def flatten_placeholder_tree(placeholder_tree):
-    ret = {}
-    for key in placeholder_tree:
-        if key == "childs":
-            for child in placeholder_tree[key]:
-                ret.update(flatten_placeholder_tree(child))
-        else:
-            ret.update(placeholder_tree[key])
-    return ret
-
-
 def get_cluster(n_parameter_servers, n_workers):
     spec = {}
     port = get_available_port(2222)
@@ -126,9 +56,10 @@ class Worker:
         self.env = environment.Environment.from_conf(self.conf.environment_conf)
         agency_name = self.conf.worker_conf.agency_conf_path.split("/")[-1]
         self.discount_factor = self.conf.worker_conf.discount_factor
-        self.sequence_length = self.conf.worker_conf.sequence_length
+        self.sequence_length = self.conf.worker_conf.sequence_length  # to delete (from here and elswhere)
         self.replay_buffer_size = self.conf.worker_conf.buffer_size
         self.updates_per_episode = self.conf.worker_conf.updates_per_episode
+        self.time_scale_factor = self.conf.worker_conf.time_scale_factor
         self.batch_size = self.conf.worker_conf.batch_size
         self.learning_rate = self.conf.worker_conf.learning_rate
         self.actor_speed_ratio = self.conf.worker_conf.actor_speed_ratio
@@ -208,89 +139,104 @@ class Worker:
             batchnorm_training=True
         )
 
-        def get_placeholder(agency_call):
-            return {
-                agency_call.placeholder_goal_0: "goal_0",
-                agency_call.placeholder_state_0: "state_0",
-                agency_call.placeholder_gstate_0: "gstate_0",
-                agency_call.placeholder_goal_1: "goal_1",
-                agency_call.placeholder_state_1: "state_1",
-                agency_call.placeholder_gstate_1: "gstate_1"
-            }
-        self._placeholder_tree_template = self.agency_update.tree_map(get_placeholder)
-        self._placeholder_tree_template[self.agency_update.name] = {
-            self.parent_goal_0: "root_goal_0",
-            self.parent_state_0: "root_state_0",
-            self.parent_gstate_0: "root_gstate_0",
-            self.parent_goal_1: "root_goal_1",
-            self.parent_state_1: "root_state_1",
-            self.parent_gstate_1: "root_gstate_1"
-        }
+        names = self.agency_update.map_level(lambda agency_call: agency_call.name)
+        self.last_level = len(names)
+        self.last_level_names = names[-1]
 
-        # define fetches to be called in a session
-        self.global_step = tf.Variable(0, dtype=tf.int64)
-        self.global_step_inc = self.global_step.assign_add(1)
-        self._local_step = 0
-        self.train_actor_critic_fetches = {
-            "root_actor_train_op": self.agency_update.root_actor_train_op,
-            "root_critic_train_op": self.agency_update.root_critic_train_op,
-            "root_readout_train_op": self.agency_update.root_readout_train_op,
-            "root_update_target_train_op": self.agency_update.root_update_target_train_op,
-            "root_batchnorm_train_op": self.agency_update.root_batchnorm_train_op,
-            "global_step": self.global_step_inc
-        }
-        self.train_critic_fetches = {
-            "root_critic_train_op": self.agency_update.root_critic_train_op,
-            "root_readout_train_op": self.agency_update.root_readout_train_op,
-            "root_update_target_train_op": self.agency_update.root_update_target_train_op,
-            "root_batchnorm_train_op": self.agency_update.root_batchnorm_train_op,
-            "global_step": self.global_step_inc
-        }
-        self.train_state_fetches = self.agency_update.root_state_train_op
-
-        def behaviour_fetches_map_func(agency_call):
+        def get_behaviour_fetch(agency_call):
             return {
+                "parent_goal_0": agency_call.parent_goal_0,
+                "parent_state_0": agency_call.parent_state_0,
+                "parent_gstate_0": agency_call.parent_gstate_0,
                 "goal_0": agency_call.goal_0,
                 "state_0": agency_call.state_0,
                 "gstate_0": agency_call.gstate_0
             }
-        self.training_behaviour_fetches = self.agency_behaviour.tree_map(behaviour_fetches_map_func)
-        self.training_behaviour_fetches[self.agency_behaviour.name] = {
-            "root_goal_0": self.parent_goal_0,
-            "root_state_0": self.parent_state_0,
-            "root_gstate_0": self.parent_gstate_0
-        }
-        self.testing_behaviour_fetches = self.agency_test.tree_map(behaviour_fetches_map_func)
-        self.testing_behaviour_fetches[self.agency_test.name] = {
-            "root_goal_0": self.parent_goal_0,
-            "root_state_0": self.parent_state_0,
-            "root_gstate_0": self.parent_gstate_0
-        }
 
-        def display_fetches_map_func(agency_call):
-            return {
-                "goal_0": agency_call.goal_0,
-                "readout_goal": agency_call.readout_goal,
-                "readout_state": agency_call.readout_state,
-                "readout_gstate": agency_call.readout_gstate,
-                "reward": agency_call.reward,
-                "mean_distance_to_goal": agency_call.mean_distance_to_goal,
-                "predicted_return": agency_call.predicted_return_00,
-                # "predicted_return": agency_call.predicted_return_01_target,
-                "critic_target": agency_call.critic_target
+        ### Training behaviour fetches
+        per_level_per_agent_behaviour_fetches = self.agency_behaviour.map_level(get_behaviour_fetch)
+        self.training_behaviour_fetches = []
+        for level_behaviour_fetches in per_level_per_agent_behaviour_fetches:
+            new_level_behaviour_fetches = {
+                key: tf.concat(
+                    [agent_behaviour_fetches[key] for agent_behaviour_fetches in level_behaviour_fetches],
+                    axis=0)
+                    for key in level_behaviour_fetches[0]
             }
-        self.display_testing_behaviour_fetches = self.agency_test.tree_map(display_fetches_map_func)
-        self.display_testing_behaviour_fetches[self.agency_test.name] = {
-            "goal_0": self.parent_goal_0,
-            "state_0": self.parent_state_0,
-            "gstate_0": self.parent_gstate_0
-        }
-        self.display_training_behaviour_fetches = self.agency_behaviour.tree_map(display_fetches_map_func)
-        self.display_training_behaviour_fetches[self.agency_behaviour.name] = {
-            "goal_0": self.parent_goal_0,
-            "state_0": self.parent_state_0,
-            "gstate_0": self.parent_gstate_0
-        }
+            self.training_behaviour_fetches.append(new_level_behaviour_fetches)
+        ### self.training_behaviour_fetches = [
+        #    {
+        #        "parent_goal_0": tensor of shape (n_agent_at_that_level, parent_goal_0_size),
+        #        "parent_state_0": tensor of shape (n_agent_at_that_level, parent_state_0_size),
+        #        ...
+        #    }
+        # for every level]
+
+        ### Testing behaviour fetches
+        per_level_per_agent_behaviour_fetches = self.agency_test.map_level(get_behaviour_fetch)
+        self.testing_behaviour_fetches = []
+        for level_behaviour_fetches in per_level_per_agent_behaviour_fetches:
+            new_level_behaviour_fetches = {
+                key: tf.concat(
+                    [agent_behaviour_fetches[key] for agent_behaviour_fetches in level_behaviour_fetches],
+                    axis=0)
+                    for key in level_behaviour_fetches[0]
+            }
+            self.testing_behaviour_fetches.append(new_level_behaviour_fetches)
+
+        def get_placeholders(agency_call):
+            return {
+                "parent_goal_0": agency_call.parent_goal_0,
+                "parent_state_0": agency_call.parent_state_0,
+                "parent_gstate_0": agency_call.parent_gstate_0,
+                "parent_state_1": agency_call.parent_state_1,  # for the summaries and training the critic
+                "parent_gstate_1": agency_call.parent_gstate_1,
+                "goal_0": agency_call.placeholder_goal_0,
+                # "parent_goal_1": agency_call.parent_goal_1,    # a priori useless
+                # "state_0": agency_call.placeholder_state_0,    # a priori useless
+                # "gstate_0": agency_call.placeholder_gstate_0   # a priori useless
+            }
+
+        ### for every level: a list for every agent of dict containing all input / output placeholders
+        ### the keys must match those of the stacked_transitions / behaviour_fetch (except the time indice)
+        self.training_placeholder = self.agency_update.map_level(get_placeholders)
+
+        def get_actor_critic_fetches(agency_call):
+            return {
+                # "readout_train_op": agency_call.readout_train_op,  # not used at the moment
+                "state_train_op": agency_call.state_train_op,
+                "actor_train_op": agency_call.actor_train_op,
+                "critic_train_op": agency_call.critic_train_op,
+                "update_target_weights_op": agency_call.update_target_weights_op,
+                "batchnorm_train_op": agency_call.batchnorm_train_op,  # depends on placeholder root_state_0 ???
+                "level_counter": agency_call.level_counter_inc
+            }
+
+        def get_critic_fetches(agency_call):
+            return {
+                # "readout_train_op": agency_call.readout_train_op,  # not used at the moment
+                "critic_train_op": agency_call.critic_train_op,
+                "update_target_weights_op": agency_call.update_target_weights_op,
+                "batchnorm_train_op": agency_call.batchnorm_train_op,  # depends on placeholder root_state_0 ???
+                "level_counter": agency_call.level_counter_inc
+            }
+
+        self.train_actor_critic_fetches = self.agency_update.map_level(get_actor_critic_fetches)
+        self.train_critic_fetches = self.agency_update.map_level(get_critic_fetches)
+
+        def get_goal_placeholders(agency_call):
+            return agency_call.placeholder_goal_0
+
+        ### list of lists of goal placeholder (per level)
+        ### order in one level must match order of beheviour fetches
+        self.training_behaviour_goals_placeholders = [[self.parent_goal_0]] + self.agency_behaviour.map_level(get_goal_placeholders)[:-1]
+        self.testing_behaviour_goals_placeholders = [[self.parent_goal_0]] + self.agency_test.map_level(get_goal_placeholders)[:-1]
+        self.summaries = list(map(tf.summary.merge, self.agency_update.map_level(lambda agency_call: agency_call.summary)))
+        ##################################
+        self.replay_buffers = [Buffer(self.replay_buffer_size) for level in range(self.last_level + 1)]
+        self.global_step = tf.Variable(0, dtype=tf.int64)
+        self.global_step_inc = self.global_step.assign_add(1)
+        self._local_step = 0
 
         self.saver = tf.train.Saver()
         self._initializer = tf.global_variables_initializer()
@@ -345,24 +291,6 @@ class Worker:
         self.saver.restore(self.sess, os.path.normpath(path + "/network.ckpt"))
         self.pipe.send("{} variables restored from {}".format(self.name, path))
 
-    def run_training(self, n_updates):
-        global_step = self.sess.run(self.global_step)
-        n_updates += global_step
-        while global_step < n_updates - self._n_workers:
-            # Collect some experience
-            transitions = self.run_n_steps()
-            # Update the global networks
-            for i in range(self.updates_per_episode):
-               transitions = self.replay_buffer.batch(self.batch_size)
-               stacked_transitions = stack_transitions(transitions)
-               train_actor = self._local_step % self.train_actor_every == 0 and global_step > 10000
-               train_state = train_actor
-               # train_state = self._local_step % self.train_state_every == 0
-               global_step = self.update_reinforcement_learning(stacked_transitions, train_actor=train_actor, train_state=train_state)
-               if global_step >= n_updates - self._n_workers:
-                   break
-        self.pipe.send("{} going IDLE".format(self.name))
-
     def run_display(self, training=False):
         display = Display(self, training)
         display.show()
@@ -389,35 +317,6 @@ class Worker:
     def get_gstate(self):
         return self.env.sincos_positions[np.newaxis]
 
-    def run_n_steps(self):
-        goal = self.get_goal()
-        state = self.get_state()
-        gstate = self.get_gstate()
-        transitions = []
-        for iteration in range(self.sequence_length):
-            feed_dict = self.behaviour_feed_dict(goal, state, gstate)
-            # feed_dict feeds root with data from 'state', 'gstate' and 'goal'
-            transition_0 = self.sess.run(self.training_behaviour_fetches, feed_dict=feed_dict)
-            # set action
-            action = self.to_action(transition_0)
-            self.env.set_speeds(action)
-            # run environment step
-            self.env.env_step()
-            # get states
-            state = self.get_state()
-            gstate = self.get_gstate()
-            # compute values after applying action
-            feed_dict = self.behaviour_feed_dict(goal, state, gstate)
-            # feed_dict feeds root with data from 'state', 'gstate' and 'goal'
-            transition_1 = self.sess.run(self.training_behaviour_fetches, feed_dict=feed_dict)
-            # store in replay buffer
-            transition = merge_before_after(transition_0, transition_1)
-            transitions.append(transition)
-            self.replay_buffer.incorporate(transition)
-            self.goals_buffer.register_one(gstate[0], self.env.ploting_data)
-        self.randomize_env()
-        return transitions
-
     def randomize_env(self, n=None, _answer=False):
         n = 5 if n is None else n
         for i in range(n):
@@ -430,102 +329,121 @@ class Worker:
             self.pipe.send("{} applied {} random actions".format(self.name, n))
 
     def fill_goal_buffer(self):
-        for i in range(1000):
-            print(i, end="\r")
+        for i in range(self.conf.worker_conf.goal_buffer_size * 10):
             action = {
               joint_name: np.random.uniform(low=joint.lowerLimit, high=joint.upperLimit) if joint.limitEnabled else
                           np.random.uniform(low=-3.14, high=3.14) for joint_name, joint in self.env.joints.items()}
             self.env.set_positions(action)
             self.env.env_step()
             self.goals_buffer.register_one(self.get_gstate()[0], self.env.ploting_data)
-        print("")
         self.pipe.send("{} filled goal buffer".format(self.name))
 
-    # def randomize_env(self, n=None, _answer=False):
-    #     n = 5 if n is None else n
-    #     for i in range(n):
-    #         action = {
-    #             "left_elbow": np.random.uniform(low=-2, high=2),
-    #             "left_shoulder": np.random.uniform(low=-3.14, high=3.14),
-    #             "right_elbow": np.random.uniform(low=-2, high=2),
-    #             "right_shoulder": np.random.uniform(low=-3.14, high=3.14)
-    #         }
-    #         self.env.set_positions(action)
-    #         # self.env.set_speeds(action)
-    #         self.env.env_step()
-    #     if _answer:
-    #         self.pipe.send("{} applied {} random actions".format(self.name, n))
+    def register_current_gstate(self):
+        gstate = self.get_gstate()
+        self.goals_buffer.register_one(gstate[0], self.env.ploting_data)
 
-    def update_reinforcement_learning(self, stacked_transitions, train_actor=True, train_state=True):
-        # stack_transitions as the form :
-        # {"all_body": {"goal_0": data, "goal_1": data, "state_0": data, ...},
-        #  "childs": [{"left_arm": {data},
-        #              "childs": [...]},
-        #              "right_arm": {data},
-        #              "childs": [...]]
-        # }
-        feed_dict = self.training_feed_dict(stacked_transitions)
-        # feed_dict feeds every agent with data from 'stacked_transitions'
-        if train_actor:
-            # train actor and critic
-            ret = self.sess.run(self.train_actor_critic_fetches, feed_dict=feed_dict)
+    def train(self, n_updates):
+        global_step = self.sess.run(self.global_step)
+        global_step_limit = n_updates + global_step
+        goals = [self.get_goal()]
+        while not self.recursive_train_at(0, goals, global_step_limit):
+            goals = [self.get_goal()]
+        self.pipe.send("{} going IDLE".format(self.name))
+
+    def apply(self, goals):
+        self.env.set_speeds(dict(zip(self.last_level_names, goals)))
+        self.env.env_step()
+        # self.env.step()
+        # print("measured speed: {}".format(self.env.speeds))
+
+    def recursive_train_at(self, level, goals, global_step_limit):
+        if level == self.last_level:
+            self.apply(goals)
+            self.register_current_gstate()
+            return False
         else:
-            # train critic only
-            ret = self.sess.run(self.train_critic_fetches, feed_dict=feed_dict)
-            # debug
-            # ret, debug_data = self.sess.run([self.train_critic_fetches, self.debug_fetch], feed_dict=feed_dict)
-            # print(debug_data)
-        if train_state:
-            # train state
-            feed_dict = self.state_feed_dict(stacked_transitions)
-            # feed_dict feeds only root with data from 'stacked_transitions'
-            self.sess.run(self.train_state_fetches, feed_dict=feed_dict)
-        if ret["global_step"] % 100 == 0:
-            print("{} finished update number {}".format(self.name, ret["global_step"]))
+            must_stop = self.recursive_gather_data_at(level, goals, global_step_limit)
+            if must_stop:
+                return True
+            for i in range(self.updates_per_episode):
+                must_stop = self.train_from_buffer_at(level, global_step_limit)
+                if must_stop:
+                    return True
+        return must_stop
+
+    def recursive_gather_data_at(self, level, goals, global_step_limit):
+        state = self.get_state()
+        gstate = self.get_gstate()
+        for i in range(self.time_scale_factor):
+            ### feed_dict must feed root state and roo gstate, but goal in the level's goal placeholders
+            if i == 0:
+                feed_dict = self.behaviour_feed_dict(level, goals, state, gstate)
+                transition_0 = self.sess.run(self.training_behaviour_fetches[level], feed_dict=feed_dict)  # (my level only)
+            else:
+                transition_0 = transition_1
+            # set action
+            must_stop = self.recursive_train_at(level + 1, transition_0["goal_0"], global_step_limit)
+            if must_stop:
+                return True
+            # compute values after applying action
+            ### update feed_dict
+            feed_dict[self.parent_state_0] = self.get_state()
+            feed_dict[self.parent_gstate_0] = self.get_gstate()
+            # feed_dict feeds root with data from 'state', 'gstate' and 'goal'
+            transition_1 = self.sess.run(self.training_behaviour_fetches[level], feed_dict=feed_dict)
+            # store in replay buffer
+            self.replay_buffers[level].incorporate(transition_0, transition_1)
+        return must_stop
+
+    def train_from_buffer_at(self, level, global_step_limit):
+        transitions = self.replay_buffers[level].batch(self.batch_size)
+        train_actor = self._local_step % self.train_actor_every == 0
+        global_step = self.update_at(level, transitions, train_actor=train_actor)
+        must_stop = global_step >= global_step_limit - self._n_workers
+        return must_stop
+
+    def update_at(self, level, transitions, train_actor=True):
+        # transitions is a slice of the replay buffer :
+        # array of shape (batch_size, n_agents) of dtype behaviour_fetch_type
+        feed_dict = self.training_feed_dict(level, transitions)
+        global_step_fetch = self.global_step_inc if level == self.last_level - 1 else self.global_step
+        # feed_dict feeds every agent at one level with data from 'transitions'
+        if train_actor:
+            ret, global_step = self.sess.run([self.train_actor_critic_fetches[level], global_step_fetch], feed_dict=feed_dict)
+        else:
+            ret, global_step = self.sess.run([self.train_critic_fetches[level], global_step_fetch], feed_dict=feed_dict)
+        level_counter = ret[0]["level_counter"]
+        if level_counter % 100 == 0:
+            print("{} finished update number {} at level {} (global_step {})".format(self.name, level_counter, level, global_step))
         self._local_step += 1
-        global_step = ret["global_step"]
-        if (global_step < 20000 and global_step % 100 == 0) or (global_step >= 20000 and global_step % 500 == 0) or (self._local_step < 20 and global_step % 5 == 0):
-            feed_dict = self.state_feed_dict(stacked_transitions)
+        log_freq = 5 * 10 ** int(np.log10(level_counter) / 2)
+        if level_counter % log_freq == 0 or (self._local_step < 20 and level_counter % 5 == 0):
+            # TODO
+            # feed_dict = self.state_feed_dict(transitions)
             self.add_summary(
-                self.sess.run(self.agency_update.root_summary_op, feed_dict=feed_dict),
-                global_step=global_step
+                self.sess.run(self.summaries[level], feed_dict=feed_dict),
+                global_step=level_counter
             )
         return global_step
 
-    def _get_new_placeholder_tree(self):
-        return placeholder_tree_copy(self._placeholder_tree_template)
+    def behaviour_feed_dict(self, level, goals, state, gstate, train=True):
+        behaviour_goals_placeholders = self.training_behaviour_goals_placeholders[level] \
+                        if train else self.testing_behaviour_goals_placeholders[level]
+        feed_dict = {}
+        for placeholder, goal in zip(behaviour_goals_placeholders, goals):
+            feed_dict[placeholder] = goal.reshape((1, -1))
+        feed_dict[self.parent_state_0] = state
+        feed_dict[self.parent_gstate_0] = gstate
+        return feed_dict
 
-    def training_feed_dict(self, stacked_transitions):
-        placeholder_tree = self._get_new_placeholder_tree()
-        fill_placeholder_tree(placeholder_tree, stacked_transitions)
-        return flatten_placeholder_tree(placeholder_tree)
+    def training_feed_dict(self, level, transitions):
+        feed_dict = {}
+        for i, placeholders in enumerate(self.training_placeholder[level]):
+            for key, placeholder in placeholders.items():
+                if placeholder not in feed_dict:
+                    feed_dict[placeholder] = transitions[key][:, i]
+        return feed_dict
 
-    def state_feed_dict(self, stacked_transitions):
-        # hard coded, must be changed
-        return {
-            self.parent_goal_0: stacked_transitions["all_body"]["root_goal_0"],
-            self.parent_state_0: stacked_transitions["all_body"]["root_state_0"],
-            self.parent_gstate_0: stacked_transitions["all_body"]["root_gstate_0"],
-            # self.parent_goal_1: stacked_transitions["all_body"]["root_goal_1"],
-            self.parent_state_1: stacked_transitions["all_body"]["root_state_1"],
-            self.parent_gstate_1: stacked_transitions["all_body"]["root_gstate_1"]
-        }
-
-    def display_feed_dict(self, goal_0, state_0, gstate_0, state_1, gstate_1):
-        return {
-            self.parent_goal_0: goal_0,
-            self.parent_state_0: state_0,
-            self.parent_gstate_0: gstate_0,
-            self.parent_state_1: state_1,
-            self.parent_gstate_1: gstate_1
-        }
-
-    def behaviour_feed_dict(self, goal, state, gstate):
-        return {
-            self.parent_goal_0: goal,
-            self.parent_state_0: state,
-            self.parent_gstate_0: gstate
-        }
 
 
 def collect_summaries(queue, path):

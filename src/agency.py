@@ -440,6 +440,9 @@ class AgencyModel(AgencyRootModel):
             tensors["parent_goal_1"] = parent_goal_1
             tensors["parent_state_1"] = parent_state_1
             tensors["parent_gstate_1"] = parent_gstate_1
+            ### COUNTER
+            tensors["level_counter"] = tf.Variable(0)
+            tensors["level_counter_inc"] = tensors["level_counter"].assign_add(1)
             ### GOAL
             tensors["goal_0"] = self.policy_model(
                 parent_state_0,
@@ -874,6 +877,55 @@ class AgencyCallRoot:
             return {self.name: None if exclude_root else func(self),
                     "childs" : [c.tree_map(func, False) for c in self.childs]}
 
+    def grouped_map_level(self, func):
+        res = []
+        for child in self.childs:
+            lists = child.grouped_map_level(func)
+            print("----------", lists)
+            # child_1_lists = [   [[f(a1)]],    [ [f(b1), f(b2)] , [f(b3), f(b4)] ]   ]
+            # child_2_lists = [   [[f(A1)]],    [ [f(B1), f(B2)] , [f(B3), f(B4)] ]   ]
+            # result = [   [ [f(a1)],  [f(A1)] ] ,  [ [f(b1), f(b2), f(b3), f(b4)], [f(B1), f(B2), f(B3), f(B4)] ] ]
+            for i, l in enumerate(lists):
+                if i == len(res):
+                    res.append([])
+                res[i].append([a for b in l for a in b])
+        res[0] = [[a for b in res[0] for a in b]]
+        return res
+
+    # def grouped_map_level(self, func):
+    #     res = []
+    #     for child in self.childs:
+    #         lists = child.grouped_map_level(func)
+    #         print("----------", lists)
+    #         # child_1_lists = [   [[f(a1)]],    [ [f(b1), f(b2)] , [f(b3), f(b4)] ]   ]
+    #         # child_2_lists = [   [[f(A1)]],    [ [f(B1), f(B2)] , [f(B3), f(B4)] ]   ]
+    #         # result = [   [ [f(a1)],  [f(A1)] ] ,  [ [f(b1), f(b2), f(b3), f(b4)], [f(B1), f(B2), f(B3), f(B4)] ] ]
+    #         for i, l in enumerate(lists):
+    #             if i == len(res):
+    #                 res.append([])
+    #             if i == 0:
+    #                 if len(res[i]) == 0:
+    #                     res[i].append([a for b in l for a in b])
+    #                 else:
+    #                     res[i][0] += [a for b in l for a in b]
+    #             else:
+    #                 res[i].append([a for b in l for a in b])
+    #     return res
+
+    def merged_map_level(self, func):
+        res = []
+        for child in self.childs:
+            lists = child.merged_map_level(func)
+            for i, l in enumerate(lists):
+                if i == len(res):
+                    res.append(l)
+                else:
+                    res[i] += l
+        return res
+
+    def map_level(self, func, grouped=False):
+        return self.grouped_map_level(func) if grouped else self.merged_map_level(func)
+
 
 class AgencyCall(AgencyCallRoot):
     def __init__(self, tensors):
@@ -899,6 +951,31 @@ class AgencyCall(AgencyCallRoot):
             # return {"name": self.name,
             #         "result": func(self),
             #         "childs" : [c.tree_map(func, False) for c in self.childs]}
+
+    def grouped_map_level(self, func):
+        res = []
+        for child in self.childs:
+            lists = child.grouped_map_level(func)
+            print("----------", lists)
+            # child_1_lists = [   [[f(a1)]],    [ [f(b1), f(b2)] , [f(b3), f(b4)] ]   ]
+            # child_2_lists = [   [[f(A1)]],    [ [f(B1), f(B2)] , [f(B3), f(B4)] ]   ]
+            # result = [   [ [f(a1)],  [f(A1)] ] ,  [ [f(b1), f(b2), f(b3), f(b4)], [f(B1), f(B2), f(B3), f(B4)] ] ]
+            for i, l in enumerate(lists):
+                if i == len(res):
+                    res.append([])
+                res[i].append([a for b in l for a in b])
+        return [[[func(self)]]] + res
+
+    def merged_map_level(self, func):
+        res = []
+        for child in self.childs:
+            lists = child.merged_map_level(func)
+            for i, l in enumerate(lists):
+                if i == len(res):
+                    res.append(l)
+                else:
+                    res[i] += l
+        return [[func(self)]] + res
 
 
 if __name__ == "__main__":

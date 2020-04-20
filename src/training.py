@@ -87,6 +87,12 @@ if __name__ == "__main__":
         default=1
     )
     parser.add_argument(
+        '-tsf', '--time-scale-factor',
+        type=int,
+        help="Number of child updates per father updates.",
+        default=10
+    )
+    parser.add_argument(
         '-b', '--batch-size',
         type=int,
         help="Number of trajectories in a batch.",
