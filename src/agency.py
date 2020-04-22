@@ -836,32 +836,7 @@ class AgencyCallRoot:
     def __init__(self, name, learning_rate, actor_speed_ratio, childs=[]):
         self.name = name
         self.childs = [AgencyCall(child) for child in childs]
-        ### ACTOR
-        self.root_actor_train_op = tf.group(self.tree_map(lambda agency_call: agency_call.actor_train_op, as_list=True))
-        self.root_batchnorm_train_op = tf.group(self.tree_map(lambda agency_call: agency_call.batchnorm_train_op, as_list=True))
-        ### CRITIC
-        self.root_critic_train_op = tf.group(self.tree_map(lambda agency_call: agency_call.critic_train_op, as_list=True))
-        ### TARGETS
-        self.root_update_target_train_op = tf.group(self.tree_map(lambda agency_call: agency_call.update_target_weights_op, as_list=True))
         self.root_init_target_op = tf.group(self.tree_map(lambda agency_call: agency_call.init_target_weights_op, as_list=True))
-        ### STATE
-        states_params = self.tree_map(lambda agency: agency.state_model_variables, as_list=True)
-        states_params = [item for sublist in states_params for item in sublist]
-        # state_loss = sum(self.tree_map(lambda agency_call: agency_call.critic_loss, as_list=True))
-        state_loss = - sum(self.tree_map(lambda agency_call: tf.reduce_mean(agency_call.predicted_return_00), as_list=True))
-        state_optimizer = tf.train.AdamOptimizer(learning_rate / actor_speed_ratio)
-        try:
-            self.root_state_train_op = state_optimizer.minimize(state_loss, var_list=states_params)
-        except ValueError as err:
-            print(err)
-            print("The gradient for the state representation could not be computed.\n"
-                   "This is a normal behaviour if the agency has a single agent.\n"
-                   "Setting the state train op to a tf.no_op!")
-            self.root_state_train_op = tf.no_op()
-        ### READOUT
-        self.root_readout_train_op = tf.group(self.tree_map(lambda agency_call: agency_call.readout_train_op, as_list=True))
-        ### SUMMARIES
-        self.root_summary_op = tf.summary.merge(self.tree_map(lambda agency_call: agency_call.summary, as_list=True))
 
     def __getitem__(self, args):
         if isinstance(args, int):
