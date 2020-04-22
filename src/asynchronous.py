@@ -82,12 +82,12 @@ class Worker:
         state_size = self.get_state().shape[1]
         goal_size = self.get_gstate().shape[1]
 
-        self.parent_goal_0 = tf.placeholder(shape=(None, goal_size), dtype=tf.float32)
-        self.parent_state_0 = tf.placeholder(shape=(None, state_size), dtype=tf.float32)
-        self.parent_gstate_0 = tf.placeholder(shape=(None, goal_size), dtype=tf.float32)
-        self.parent_goal_1 = tf.placeholder(shape=(None, goal_size), dtype=tf.float32)
-        self.parent_state_1 = tf.placeholder(shape=(None, state_size), dtype=tf.float32)
-        self.parent_gstate_1 = tf.placeholder(shape=(None, goal_size), dtype=tf.float32)
+        self.parent_goal_0 = tf.placeholder(shape=(None, goal_size), dtype=tf.float32, name="root_goal_0")
+        self.parent_state_0 = tf.placeholder(shape=(None, state_size), dtype=tf.float32, name="root_state_0")
+        self.parent_gstate_0 = tf.placeholder(shape=(None, goal_size), dtype=tf.float32, name="root_gstate_0")
+        self.parent_goal_1 = tf.placeholder(shape=(None, goal_size), dtype=tf.float32, name="root_goal_1")
+        self.parent_state_1 = tf.placeholder(shape=(None, state_size), dtype=tf.float32, name="root_state_1")
+        self.parent_gstate_1 = tf.placeholder(shape=(None, goal_size), dtype=tf.float32, name="root_gstate_1")
 
         self.agency_model = agency.AgencyRootModel.from_conf(self.conf.worker_conf.agency_conf_path)
         print("{} agency_behaviour call".format(self.name))

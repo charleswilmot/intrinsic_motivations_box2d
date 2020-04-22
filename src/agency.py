@@ -499,33 +499,39 @@ class AgencyModel(AgencyRootModel):
             tensors["placeholder_goal_0"] = tf.placeholder_with_default(
                 # tf.stop_gradient(tensors["goal_0"]),
                 tensors["goal_0"],
-                shape=tensors["goal_0"].get_shape()
+                shape=tensors["goal_0"].get_shape(),
+                name=self.name + "_goal_0"
             )
             tensors["placeholder_state_0"] = tf.placeholder_with_default(
                 # tf.stop_gradient(tensors["state_0"]),
                 tensors["state_0"],
-                shape=tensors["state_0"].get_shape()
+                shape=tensors["state_0"].get_shape(),
+                name=self.name + "_state_0"
             )
             tensors["placeholder_gstate_0"] = tf.placeholder_with_default(
                 # tf.stop_gradient(tensors["gstate_0"]),
                 tensors["gstate_0"],
-                shape=tensors["gstate_0"].get_shape()
+                shape=tensors["gstate_0"].get_shape(),
+                name=self.name + "_gstate_0"
             )
             # apparently useless...
             tensors["placeholder_goal_1"] = tf.placeholder_with_default(
                 # tf.stop_gradient(tensors["goal_1"]),
                 tensors["goal_1"],
-                shape=tensors["goal_1"].get_shape()
+                shape=tensors["goal_1"].get_shape(),
+                name=self.name + "_goal_1"
             )
             tensors["placeholder_state_1"] = tf.placeholder_with_default(
                 # tf.stop_gradient(tensors["state_1"]),
                 tensors["state_1"],
-                shape=tensors["state_1"].get_shape()
+                shape=tensors["state_1"].get_shape(),
+                name=self.name + "_state_1"
             )
             tensors["placeholder_gstate_1"] = tf.placeholder_with_default(
                 # tf.stop_gradient(tensors["gstate_1"]),
                 tensors["gstate_1"],
-                shape=tensors["gstate_1"].get_shape()
+                shape=tensors["gstate_1"].get_shape(),
+                name=self.name + "_gstate_1"
             )
             ### REWARD
             tensors["mean_distance_to_goal"] = tf.reduce_mean(d(parent_goal_0, parent_gstate_1))
