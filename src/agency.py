@@ -474,7 +474,7 @@ class AgencyModel(AgencyRootModel):
             ### STATE
             tensors["state_0"] = self.state_model(parent_state_0, training=batchnorm_training)
             tensors["state_1"] = self.state_model(parent_state_1, training=False)
-            tensors["state_model_variables"] = self.state_model.trainable_variables
+            # tensors["state_model_variables"] = self.state_model.trainable_variables  # can be removed
             ### GSTATE
             tensors["gstate_0"] = self.policy_model(
                 parent_state_0,
@@ -808,6 +808,10 @@ class AgencyModel(AgencyRootModel):
                 behaviour_noise_scale=behaviour_noise_scale,
                 target_smoothing_noise_scale=target_smoothing_noise_scale)
                 for child in self.childs]
+            tensors["state_train_op"] = tf.train.AdamOptimizer(learning_rate / actor_speed_ratio).minimize(
+                -sum([c["predicted_return_00"] for c in tensors["childs"]]) / len(tensors["childs"]),
+                var_list=self.state_model.trainable_variables
+            ) if len(tensors["childs"]) else tf.no_op()
             return tensors
 
     def tree_map(self, func, as_list=False):
