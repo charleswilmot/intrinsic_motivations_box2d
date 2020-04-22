@@ -638,7 +638,7 @@ class AgencyModel(AgencyRootModel):
                 self.policy_model.batchnorm_op + \
                 self.critic_0_model.batchnorm_op + \
                 self.critic_1_model.batchnorm_op + \
-                self.state_model.batchnorm_op
+                self.state_model.batchnorm_op  # warning: there must be no batchnorm on the state output if there is no childs. This causes an error (ie this batchnorm op would weirdly depend on the root_state_0 placeholder)
             ### TARGET NETWORKS
             # init
             init_target_weights_ops = []
