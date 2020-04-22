@@ -237,8 +237,9 @@ if __name__ == "__main__":
         if args.tensorboard:
             experiment.start_tensorboard()
         experiment.randomize_env(n=100)
+        experiment.fill_goal_buffer()
         for i in range(args.n_trajectories // args.save_every):
-            experiment.asynchronously_train(args.save_every)
+            experiment.train(args.save_every)
             experiment.save_model()
         if args.video:
             experiment.save_video("final.mp4")

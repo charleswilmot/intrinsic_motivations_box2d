@@ -591,9 +591,9 @@ class Experiment:
         for p in self.here_worker_pipes:
             p.recv()
 
-    def asynchronously_train(self, n_updates):
+    def train(self, n_updates):
         for p in self.here_worker_pipes:
-            p.send(("run_training", n_updates))
+            p.send(("train", n_updates))
         for p in self.here_worker_pipes:
             p.recv()
 
