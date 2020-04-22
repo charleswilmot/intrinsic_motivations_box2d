@@ -75,12 +75,6 @@ if __name__ == "__main__":
         default=500000
     )
     parser.add_argument(
-        '-sl', '--sequence-length',
-        type=int,
-        help="Length of an episode.",
-        default=100
-    )
-    parser.add_argument(
         '-u', '--updates-per-episode',
         type=int,
         help="Number of updates per gathered trajectory.",
@@ -121,12 +115,6 @@ if __name__ == "__main__":
         type=int,
         default=10,
         help="How often is the actor trained?"
-    )
-    parser.add_argument(
-        '-tse', '--train-state-every',
-        type=int,
-        default=10,
-        help="How often is the state trained?"
     )
     parser.add_argument(
         '-df', '--discount-factor',

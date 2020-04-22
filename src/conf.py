@@ -20,18 +20,13 @@ class ConfRoot:
 
 
 class WorkerConf(ConfRoot):
-    def __init__(self, discount_factor, sequence_length, learning_rate, actor_speed_ratio,
-                       train_actor_every, train_state_every,
-                       buffer_size, updates_per_episode, time_scale_factor, batch_size,
-                       tau, behaviour_noise_scale, target_smoothing_noise_scale,
-                       goal_buffer_size,
-                       agency_conf_path):
+    def __init__(self, discount_factor, learning_rate, actor_speed_ratio, train_actor_every, buffer_size,
+                       updates_per_episode, time_scale_factor, batch_size, tau, behaviour_noise_scale,
+                       target_smoothing_noise_scale, goal_buffer_size, agency_conf_path):
         self.discount_factor = discount_factor
-        self.sequence_length = sequence_length
         self.learning_rate = learning_rate
         self.actor_speed_ratio = actor_speed_ratio
         self.train_actor_every = train_actor_every
-        self.train_state_every = train_state_every
         self.buffer_size = buffer_size
         self.updates_per_episode = updates_per_episode
         self.time_scale_factor = time_scale_factor
@@ -45,11 +40,9 @@ class WorkerConf(ConfRoot):
     @staticmethod
     def from_args(args):
         return WorkerConf(args.discount_factor,
-                          args.sequence_length,
                           args.learning_rate,
                           args.actor_speed_ratio,
                           args.train_actor_every,
-                          args.train_state_every,
                           args.buffer_size,
                           args.updates_per_episode,
                           args.time_scale_factor,

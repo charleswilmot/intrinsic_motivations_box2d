@@ -64,7 +64,6 @@ class Worker:
         self.learning_rate = self.conf.worker_conf.learning_rate
         self.actor_speed_ratio = self.conf.worker_conf.actor_speed_ratio
         self.train_actor_every = self.conf.worker_conf.train_actor_every
-        self.train_state_every = self.conf.worker_conf.train_state_every
         self.tau = self.conf.worker_conf.tau
         self.behaviour_noise_scale = self.conf.worker_conf.behaviour_noise_scale
         self.target_smoothing_noise_scale = self.conf.worker_conf.target_smoothing_noise_scale
