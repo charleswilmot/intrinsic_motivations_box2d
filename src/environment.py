@@ -114,7 +114,7 @@ class Environment(object):
             if key in self.joints:
                 if key in self._joints_in_position_mode:
                     self._joints_in_position_mode.remove(key)
-                self.joints[key].motorSpeed = np.float64(speeds[key])
+                self.joints[key].motorSpeed = np.float64(speeds[key].squeeze())
 
     # def set_positions_old(self, positions):
     #     for i, key in enumerate(self._joint_keys):
