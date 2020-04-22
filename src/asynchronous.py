@@ -89,6 +89,22 @@ class Worker:
         self.parent_gstate_1 = tf.placeholder(shape=(None, goal_size), dtype=tf.float32, name="root_gstate_1")
 
         self.agency_model = agency.AgencyRootModel.from_conf(self.conf.worker_conf.agency_conf_path)
+        print("{} agency_update call".format(self.name))
+        self.agency_update = self.agency_model(
+            self.parent_goal_0,
+            self.parent_state_0,
+            self.parent_gstate_0,
+            self.parent_goal_1,
+            self.parent_state_1,
+            self.parent_gstate_1,
+            learning_rate=self.learning_rate,
+            actor_speed_ratio=self.actor_speed_ratio,
+            discount_factor=self.discount_factor,
+            tau=self.tau,
+            behaviour_noise_scale=None,
+            target_smoothing_noise_scale=self.target_smoothing_noise_scale,
+            batchnorm_training=True
+        )
         print("{} agency_behaviour call".format(self.name))
         self.agency_behaviour = self.agency_model(
             self.parent_goal_0,
@@ -120,22 +136,6 @@ class Worker:
             behaviour_noise_scale=None,
             target_smoothing_noise_scale=None,
             batchnorm_training=False
-        )
-        print("{} agency_update call".format(self.name))
-        self.agency_update = self.agency_model(
-            self.parent_goal_0,
-            self.parent_state_0,
-            self.parent_gstate_0,
-            self.parent_goal_1,
-            self.parent_state_1,
-            self.parent_gstate_1,
-            learning_rate=self.learning_rate,
-            actor_speed_ratio=self.actor_speed_ratio,
-            discount_factor=self.discount_factor,
-            tau=self.tau,
-            behaviour_noise_scale=None,
-            target_smoothing_noise_scale=self.target_smoothing_noise_scale,
-            batchnorm_training=True
         )
 
         names = self.agency_update.map_level(lambda agency_call: agency_call.name)
