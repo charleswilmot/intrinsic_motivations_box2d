@@ -242,13 +242,6 @@ class Worker:
         self._report_non_initialized = tf.report_uninitialized_variables()
         self.sess = tf.Session(target=self.server.target)
 
-    def to_action(self, transition):
-        if not len(transition["childs"]):
-            name = [k for k in transition if k != "childs"][0]
-            return {name: transition[name]["goal_0"][0, 0]}
-        else:
-            return {k: v for d in [self.to_action(c) for c in transition["childs"]] for k, v in d.items()}
-
     def add_summary(self, summary, global_step):
         try:
             self.summary_queue.put((summary, global_step), block=False)
