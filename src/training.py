@@ -90,7 +90,7 @@ if __name__ == "__main__":
         '-b', '--batch-size',
         type=int,
         help="Number of trajectories in a batch.",
-        default=1
+        default=32
     )
     parser.add_argument(
         '-r', '--restore-from',
