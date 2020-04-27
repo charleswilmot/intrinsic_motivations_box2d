@@ -289,7 +289,7 @@ class ComputationCenter(QtCore.QThread):
             pass
 
 
-
+# could very well be a method inside worker ? as well as the ComputationCenter ? Could the worker inherit from QThread itself?
 class Display:
     def __init__(self, worker, training=None, save=False, save_path=None):
         self.worker = worker
