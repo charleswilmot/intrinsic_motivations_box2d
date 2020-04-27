@@ -56,7 +56,6 @@ class Worker:
         self.env = environment.Environment.from_conf(self.conf.environment_conf)
         agency_name = self.conf.worker_conf.agency_conf_path.split("/")[-1]
         self.discount_factor = self.conf.worker_conf.discount_factor
-        self.sequence_length = self.conf.worker_conf.sequence_length  # to delete (from here and elswhere)
         self.replay_buffer_size = self.conf.worker_conf.buffer_size
         self.updates_per_episode = self.conf.worker_conf.updates_per_episode
         self.time_scale_factor = self.conf.worker_conf.time_scale_factor
