@@ -1,8 +1,11 @@
+import time
 from imageio import get_writer
 import sys
 from pyqtgraph.Qt import QtGui, QtCore
 import pyqtgraph as pg
 import numpy as np
+from qimage2ndarray import rgb_view
+import tensorflow as tf
 
 
 class EnvironmentScene(QtGui.QGraphicsScene):
@@ -40,41 +43,6 @@ class EnvironmentWidget(QtGui.QGraphicsView):
 
     def refresh_data(self, ploting_data):
         self._scene.refresh_data(ploting_data)
-
-
-# class ReadoutWidget(pg.GraphicsLayoutWidget):
-#     def __init__(self, parent=None):
-#         super().__init__(parent=parent)
-#         self._view = self.addViewBox()
-#         self._scatter = pg.ScatterPlotItem(x=np.arange(10), y=np.random.uniform(size=10))
-#         self._view.addItem(self._scatter)
-#         self._x = None
-#
-#     def refresh_data(self, new):
-#         if self._x is None:
-#             self._x = np.arange(len(new))
-#         self._scatter.setData(self._x, new) ## have a look at http://www.pyqtgraph.org/documentation/_modules/pyqtgraph/graphicsItems/ScatterPlotItem.html#ScatterPlotItem.addPoints
-
-
-# class ThreeReadoutsWidget(QtGui.QWidget):
-#     def __init__(self, parent=None, horizontal=False):
-#         super().__init__(parent=parent)
-#         # self.resize(600, 100)
-#         self._state = ReadoutWidget(parent=self)
-#         self._goal = ReadoutWidget(parent=self)
-#         self._gstate = ReadoutWidget(parent=self)
-#         self._layout = QtGui.QHBoxLayout(self) if horizontal else QtGui.QVBoxLayout(self)
-#         self._layout.addWidget(self._state)
-#         self._layout.addWidget(self._goal)
-#         self._layout.addWidget(self._gstate)
-#         self.setLayout(self._layout)
-#         self._layout.setSpacing(0)
-#         self._layout.setMargin(0)
-#
-#     def refresh_data(self, state, goal, gstate):
-#         self._state.refresh_data(state)
-#         self._goal.refresh_data(goal)
-#         self._gstate.refresh_data(gstate)
 
 
 class OneValueWidget(pg.PlotWidget):
@@ -126,32 +94,15 @@ class ReturnWidget(pg.PlotWidget):
         self._target_curve.setData(x=self._x, y=self._target_buffer)
 
 
-# to update / merge with NonLeafAgentWidget
-# class RewardReturnWidget(QtGui.QWidget):
-#     def __init__(self, discount_factor, parent=None):
-#         super().__init__(parent=parent)
-#         self._reward = OneValueWidget(parent=self)
-#         self._return = ReturnWidget(discount_factor, parent=self)
-#         self._layout = QtGui.QHBoxLayout(self)
-#         self._layout.addWidget(self._reward)
-#         self._layout.addWidget(self._return)
-#         self._layout.setSpacing(0)
-#         self._layout.setMargin(0)
-#         self.setLayout(self._layout)
-#
-#     def refresh_data(self, reward, predicted_return, target):
-#         self._reward.refresh_data(reward)
-#         self._return.refresh_data(reward, predicted_return, target)
-
-
-# to update / merge with RewardReturnWidget
 class NonLeafAgentWidget(QtGui.QWidget):
-    def __init__(self, name, discount_factor, childs_names, parent=None):
+    def __init__(self, name, discount_factor, childs_names, level, parent=None):
         super().__init__(parent=parent)
         self._name_widget = QtGui.QLabel(name)
-        self._reward = OneValueWidget(parent=self)
-        self._distance = OneValueWidget((0, 255, 0), parent=self)
-        self._returns = [ReturnWidget(child_name, discount_factor, parent=self) for child_name in childs_names]
+        lookback = 50 * 10 ** level
+        self._reward = OneValueWidget(lookback=lookback, parent=self)
+        self._distance = OneValueWidget((0, 255, 0), lookback=lookback, parent=self)
+        self._distance.setYRange(-0.1, 2)
+        self._returns = [ReturnWidget(child_name, discount_factor, lookback=lookback, parent=self) for child_name in childs_names]
         self._layout = QtGui.QGridLayout(self)
         self._layout.addWidget(self._name_widget, 0, 0, 1, 1)
         self._layout.addWidget(self._distance, 1, 0, 1, 1)
@@ -170,158 +121,189 @@ class NonLeafAgentWidget(QtGui.QWidget):
 
 
 class Window(QtGui.QMainWindow):
-    def __init__(self, env, dummy_transition, discount_factor):
+    def __init__(self, env, child_names, discount_factor, save=False, save_path=None):
         super().__init__()
         # self.setGeometry(50, 50, 1000, 600)
         self._env = env
+        self._discount_factor = discount_factor
         self._central_widget = QtGui.QWidget(parent=self)
         self.setCentralWidget(self._central_widget)
         self._goal_0_widget = EnvironmentWidget(*env.renderer._x_lim, *env.renderer._y_lim, self._central_widget)
         self._goal_1_widget = EnvironmentWidget(*env.renderer._x_lim, *env.renderer._y_lim, self._central_widget)
         self._environment_widget = EnvironmentWidget(*env.renderer._x_lim, *env.renderer._y_lim, self._central_widget)
-        self._agents = self._create_agents_widget(dummy_transition, discount_factor)
-        self._agents[0]._distance.setYRange(-1, 2)
-        [a._distance.setYRange(-0.1, 1) for a in self._agents[1:]]
+        self._agents = self._create_agents_widget(child_names)
         self._layout = QtGui.QGridLayout(self._central_widget)
         self._layout.addWidget(self._goal_0_widget, 0, 0, 1, 1)
         self._layout.addWidget(self._environment_widget, 1, 0, 1, 1)
         self._layout.addWidget(self._goal_1_widget, 2, 0, 1, 1)
-        for i, agent in enumerate(self._agents):
-            self._layout.addWidget(agent, 0, i + 1, 4, 1)
+        self._last_level = len(self._agents)
+        self._save = save
+        self._saved = 0
+        self._writer = get_writer(save_path, fps=25) if self._save and save_path is not None else None
+        i = 1
+        for level in self._agents:
+            for agent in level:
+                self._layout.addWidget(agent, 0, i, 4, 1)
+                i += 1
 
-    def _create_agents_widget(self, dummy_transition, discount_factor):
-        if not len(dummy_transition["childs"]):
+    def _create_agents_widget(self, child_names, level=0):
+        # names is a dict tree like so:
+        # {"all_body": ["child1", "child2"], "childs": [{"child1": [...], "childs": [...]}, {"child2": [...], "childs": [...]}]}
+        # this function returns a list of list of NonLeafAgentWidget
+        if not len(child_names["childs"]):  # has no childs
             return []
-        name = [key for key in dummy_transition if key != "childs"][0]
-        childs_names = [[key for key in t if key != "childs"][0] for t in dummy_transition["childs"]]
-        return [NonLeafAgentWidget(name, discount_factor, childs_names, parent=self._central_widget)] + \
-                sum([self._create_agents_widget(t, discount_factor)
-                    for t in dummy_transition["childs"]], [])
+        name = [key for key in child_names if key != "childs"][0]
+        here = [[NonLeafAgentWidget(name, self._discount_factor, child_names[name], level, parent=self._central_widget)]]
+        lower = [self._create_agents_widget(lowwer_lever_child_names, level=level + 1) for lowwer_lever_child_names in child_names["childs"]]
+        return here + [sum(level, []) for level in zip(*lower)]
 
-    def _refresh_agents(self, transition, agents):
-        if not len(transition["childs"]):
-            return agents
-        childs_names = [[key for key in t if key != "childs"][0] for t in transition["childs"]]
-        reward = transition["childs"][0][childs_names[0]]["reward"][0]
-        distance = transition["childs"][0][childs_names[0]]["mean_distance_to_goal"]
-        predicted_returns = [child[name]["predicted_return"][0] for child, name in zip(transition["childs"], childs_names)]
-        targets = [child[name]["critic_target"][0] for child, name in zip(transition["childs"], childs_names)]
-        agents[0].refresh_data(distance, reward, predicted_returns, targets)
-        agents = agents[1:]
-        for t in transition["childs"]:
-            agents = self._refresh_agents(t, agents)
-        return agents
+    def _refresh_agents(self, level, data):
+        for agent, d in zip(self._agents[level], data):
+            agent.refresh_data(
+                d["mean_distance_to_goal"],
+                d["reward"][0],
+                d["predicted_return"][0],
+                d["critic_target"][0]
+            )
 
-    def refresh_data(self, transition):
-        self._refresh_agents(transition, self._agents)
+    def refresh_data(self, level, data):
+        self._refresh_agents(level, data)
         self._environment_widget.refresh_data(self._env.ploting_data)
+        self.save_frame_if_needed(level)
 
-    def refresh_goal(self, ploting_data_0, ploting_data_1):
+    def save_frame_if_needed(self, level):
+        self.update()
+        if level == self._last_level - 1 and self._save:
+            self._saved += 1
+            pixmap = QtGui.QPixmap.grabWindow(self._central_widget.winId())
+            image = pixmap.toImage()
+            image = image.convertToFormat(QtGui.QImage.Format_RGB32)
+            self._writer.append_data(rgb_view(image))
+            if self._saved == self._save:
+                self._writer.close()
+                self.emit(QtCore.SIGNAL("timeToExit"))
+
+    def refresh_goals(self, ploting_data_0, ploting_data_1):
         self._goal_0_widget.refresh_data(ploting_data_0)
         self._goal_1_widget.refresh_data(ploting_data_1)
 
 
-class Display:
-    def __init__(self, worker, training=False):
+class ComputationCenter(QtCore.QThread):
+    def __init__(self, worker, training=None):
+        QtCore.QThread.__init__(self)
         self.worker = worker
-        self._count = 0
-        self.total_count = 0
-        self._sequence_length = worker.sequence_length
+
+        def display_fetches_map_func(agency_call):
+            return {
+                # "goal_0": agency_call.goal_0,
+                "reward": agency_call.reward,
+                "mean_distance_to_goal": agency_call.mean_distance_to_goal,
+                "predicted_return": agency_call.predicted_return_00,
+                "critic_target": agency_call.critic_target
+            }
+
+        self.display_fetches = self.worker.agency_test.map_level(display_fetches_map_func)
+
+        self._counts = 0
+        self.last_level = self.worker.last_level
+        self._display_data = [None] * self.last_level
+        self._level_changed = [False] * self.last_level
+        if training is None:
+            self._training = [False for a in self.display_fetches]
+        else:
+            self._training = training
+
+    def display_feed_dict(self, level, goals, state_before, gstate_before, state_after, gstate_after):
+        # behaviour_goals_placeholders = self.worker.training_behaviour_goals_placeholders[level] \
+        #         if self._training[level] else self.worker.testing_behaviour_goals_placeholders[level]
+        behaviour_goals_placeholders = self.worker.testing_behaviour_goals_placeholders[level]
+        feed_dict = {}
+        for placeholder, goal in zip(behaviour_goals_placeholders, goals):
+            feed_dict[placeholder] = goal.reshape((1, -1))
+        feed_dict[self.worker.parent_state_0] = state_before
+        feed_dict[self.worker.parent_gstate_0] = gstate_before
+        feed_dict[self.worker.parent_state_1] = state_after
+        feed_dict[self.worker.parent_gstate_1] = gstate_after
+        return feed_dict
+
+    def refresh_updated_levels(self):
+        for level in range(self.last_level):
+            if self._level_changed[level]:
+                self.emit(QtCore.SIGNAL("refreshData"), level, self._display_data[level])
+                self._level_changed[level] = False
+
+    def recursively_apply_action(self, level, goals):
+        state_before = self.worker.get_state()
+        gstate_before = self.worker.get_gstate()
+        state_after = state_before
+        gstate_after = gstate_before
+        train = self._training[level]
+        behaviour_fetches = self.worker.training_behaviour_fetches[level] if train else self.worker.testing_behaviour_fetches[level]
+        for i in range(self.worker.time_scale_factor):
+            ### BEFORE ###
+            state_before = state_after
+            gstate_before = gstate_after
+            feed_dict = self.worker.behaviour_feed_dict(level, goals, state_before, gstate_before, train=train)
+            try:
+                transition_0 = self.worker.sess.run(behaviour_fetches, feed_dict=feed_dict)
+            except tf.errors.UnavailableError as e:
+                return True
+            action = transition_0["goal_0"]
+            if level + 1 == self.last_level:
+                self.worker.apply(action)
+                self.worker.register_current_gstate()
+                self.refresh_updated_levels()
+                must_stop = False
+            else:
+                must_stop = self.recursively_apply_action(level + 1, action)
+            if must_stop:
+                return True
+            ### AFTER ###
+            state_after = self.worker.get_state()
+            gstate_after = self.worker.get_gstate()
+            feed_dict = self.display_feed_dict(level, goals, state_before, gstate_before, state_after, gstate_after)
+            try:
+                display_data = self.worker.sess.run(self.display_fetches[level], feed_dict=feed_dict)
+            except tf.errors.UnavailableError as e:
+                return True
+            self._display_data[level] = display_data
+            self._level_changed[level] = True
+        return False
+
+    def one_high_level_iteration(self, goals):
+        return self.recursively_apply_action(0, goals)
+
+    def one_episode(self):
+        goals, (ploting_data_0, ploting_data_1) = self.worker.goals_buffer.sample()
+        self.emit(QtCore.SIGNAL("refreshGoals"), ploting_data_0, ploting_data_1)
+        return self.one_high_level_iteration([goals])
+
+    def check_for_termination(self):
+        if self._n_frames_to_render <= 0:
+            self.emit(QtCore.SIGNAL("timeToExit"))
+            return True
+        return False
+
+    def run(self):
+        while not self.one_episode():
+            pass
+
+
+
+class Display:
+    def __init__(self, worker, training=None, save=False, save_path=None):
+        self.worker = worker
         self._training = training
-        self.goal = self.worker.get_goal()
-        self.state_0 = self.worker.get_state()
-        self.gstate_0 = self.worker.get_gstate()
-        self.behaviour_fetches = self.worker.display_training_behaviour_fetches if training else self.worker.display_testing_behaviour_fetches
-        feed_dict = self.worker.behaviour_feed_dict(self.goal, self.state_0, self.gstate_0)
-        # feed_dict feeds root with data from 'state', 'gstate' and 'goal'
-        self._transition_0 = self.worker.sess.run(self.worker.training_behaviour_fetches, feed_dict=feed_dict)
-        # set action
-        action = self.worker.to_action(self._transition_0)
-        self.worker.env.set_speeds(action)
-        # run environment step
-        self.worker.env.env_step()
         self.app = QtGui.QApplication(sys.argv)
-        self.window = Window(self.worker.env, self._transition_0, self.worker.discount_factor)
+        # initialize window
+        child_names = self.worker.agency_test.tree_map(lambda agency_call: [c.name for c in agency_call.childs], exclude_root=False)
+        self.window = Window(self.worker.env, child_names, self.worker.discount_factor, save=save, save_path=save_path)
         self.window.resize(1536, 864)
         self.window.show()
-
-    def show(self):
-        timer = QtCore.QTimer()
-        timer.timeout.connect(self)
-        timer.start(0)
+        self.computation_center = ComputationCenter(worker, training=training)
+        QtCore.QObject.connect(self.computation_center, QtCore.SIGNAL("refreshData"), self.window.refresh_data, QtCore.Qt.BlockingQueuedConnection)
+        QtCore.QObject.connect(self.computation_center, QtCore.SIGNAL("refreshGoals"), self.window.refresh_goals, QtCore.Qt.BlockingQueuedConnection)
+        QtCore.QObject.connect(self.computation_center, QtCore.SIGNAL("timeToExit"), self.app.exit, QtCore.Qt.QueuedConnection)
+        QtCore.QObject.connect(self.window, QtCore.SIGNAL("timeToExit"), self.app.exit, QtCore.Qt.QueuedConnection)
+        self.computation_center.start()
         self.app.exec_()
-
-    def save(self, path, n_frames=None, length_in_sec=None):
-        if not n_frames and not length_in_sec:
-            length_in_sec = 240
-        if not n_frames:
-            n_frames = length_in_sec * 25
-        pixmap = QtGui.QPixmap.grabWindow(self.window._central_widget.winId())
-        height = pixmap.height()
-        width = pixmap.width()
-        channels_count = 3
-        size = height * width * channels_count
-        with get_writer(path, fps=25) as writer:
-            def save_func():
-                self()
-                pixmap = QtGui.QPixmap.grabWindow(self.window._central_widget.winId())
-                image = pixmap.toImage()
-                image = image.convertToFormat(QtGui.QImage.Format_RGB888)
-                bits = image.bits()
-                bits.setsize(size)
-                arr = np.frombuffer(bits, np.uint8).reshape((height, width, channels_count))
-                writer.append_data(arr)
-                if self.total_count >= n_frames:
-                    self.app.exit()
-
-            timer = QtCore.QTimer()
-            timer.timeout.connect(save_func)
-            timer.start(0)
-            self.app.exec_()
-
-    def _set_count(self, val):
-        self._count = val % self._sequence_length
-
-    def _get_count(self):
-        return self._count
-
-    count = property(_get_count, _set_count)
-
-    def __call__(self):
-        if self.count == 0:
-            # sample new goal
-            self.worker.randomize_env()
-            self.goal, (ploting_data_0, ploting_data_1) = self.worker.goals_buffer.sample()
-            self.goal = self.goal[np.newaxis]
-            self.window.refresh_goal(ploting_data_0, ploting_data_1)
-            # register goals
-            self.state_0 = self.worker.get_state()
-            self.gstate_0 = self.worker.get_gstate()
-            self.behaviour_fetches = self.worker.display_training_behaviour_fetches if self._training else self.worker.display_testing_behaviour_fetches
-            feed_dict = self.worker.behaviour_feed_dict(self.goal, self.state_0, self.gstate_0)
-            # feed_dict feeds root with data from 'state', 'gstate' and 'goal'
-            transition_0 = self.worker.sess.run(self.worker.training_behaviour_fetches, feed_dict=feed_dict)
-            # set action
-            action = self.worker.to_action(transition_0)
-            self.worker.env.set_speeds(action)
-            # run environment step
-            self.worker.env.env_step()
-        # get states
-        self.state_1 = self.worker.get_state()
-        self.gstate_1 = self.worker.get_gstate()
-        feed_dict = self.worker.display_feed_dict(self.goal, self.state_0, self.gstate_0, self.state_1, self.gstate_1)
-        # feed_dict feeds root with data from 'state', 'gstate' and 'goal'
-        transition, global_step = self.worker.sess.run([self.behaviour_fetches, self.worker.global_step], feed_dict=feed_dict)
-        # update window
-        self.window.refresh_data(transition)
-        # set action
-        action = self.worker.to_action(transition)
-        self.worker.env.set_speeds(action)
-        # run environment step
-        self.worker.env.env_step()
-        # rotate states
-        self.state_0 = self.state_1
-        self.gstate_0 = self.gstate_1
-        self.worker.goals_buffer.register_one(self.gstate_0, self.worker.env.ploting_data)
-        self.count += 1
-        self.total_count += 1

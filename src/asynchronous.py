@@ -283,15 +283,14 @@ class Worker:
         self.saver.restore(self.sess, os.path.normpath(path + "/network.ckpt"))
         self.pipe.send("{} variables restored from {}".format(self.name, path))
 
-    def run_display(self, training=False):
+    def run_display(self, training=None):
         display = Display(self, training)
-        display.show()
         self.pipe.recv()  # done
         self.pipe.send("{} (display) going IDLE".format(self.name))
 
-    def save_video(self, path, n_frames=None, length_in_sec=None, training=False):
-        display = Display(self, training)
-        display.save(path, n_frames, length_in_sec)
+    def save_video(self, path, n_frames=None, length_in_sec=None, training=None):
+        save = False if n_frames is None and length_in_sec is None else n_frames if n_frames is not None else length_in_sec * 25
+        display = Display(self, training, save=save, save_path=path)
         self.pipe.send("{} saved video under {}. display going IDLE".format(self.name, path))
 
     def save_contact_logs(self, name):
@@ -594,7 +593,7 @@ class Experiment:
         self.here_worker_pipes[0].send(("save", self.checkpointsdir))
         print(self.here_worker_pipes[0].recv())
 
-    def save_video(self, name, path=None, n_frames=None, length_in_sec=None, training=False):
+    def save_video(self, name, path=None, n_frames=None, length_in_sec=None, training=None):
         path = self.videodir + "/" + name if path is None else path + "/" + name
         self.here_worker_pipes[0].send(("save_video", path, n_frames, length_in_sec, training))
         print(self.here_worker_pipes[0].recv())
