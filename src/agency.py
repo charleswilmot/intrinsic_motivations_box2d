@@ -451,7 +451,9 @@ class AgencyModel(AgencyRootModel):
                 training=False
             )
             if behaviour_noise_scale:
-                tensors["goal_0"] += tf.random_normal(shape=tf.shape(tensors["goal_0"]), stddev=behaviour_noise_scale)
+                shape = tf.shape(tensors["goal_0"])
+                dims = tf.cast(shape[1], tf.float32)
+                tensors["goal_0"] += tf.random_normal(shape=shape, stddev=behaviour_noise_scale / tf.sqrt(dims - tf.constant(0.4)))
             # useless
             tensors["goal_1"] = self.policy_model(
                 parent_state_1,
