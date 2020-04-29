@@ -12,6 +12,7 @@ if __name__ == "__main__":
         'path', metavar="PATH",
         type=str,
         action='store',
+        nargs="+",
         help="Path to the checkpoint."
     )
     parser.add_argument(
@@ -29,16 +30,21 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     checkpoint_path = args.path
-    experiment_path = os.path.abspath(checkpoint_path + "/../../")
 
-    with open(experiment_path + "/conf/conf.pkl", "rb") as f:
-        conf = pickle.load(f)
+    for checkpoint_path in args.path:
+        print("#######################################################################################################")
+        print(checkpoint_path)
+        print("#######################################################################################################")
+        experiment_path = os.path.abspath(checkpoint_path + "/../../")
 
-    if args.time_scale_factor is not None:
-        conf.worker_conf.time_scale_factor = args.time_scale_factor
+        with open(experiment_path + "/conf/conf.pkl", "rb") as f:
+            conf = pickle.load(f)
 
-    with TemporaryDirectory() as tmppath:
-        with Experiment(1, 1, tmppath + "/replay", conf, display_dpi=3) as experiment:
-            experiment.restore_model(checkpoint_path)
-            experiment.fill_goal_buffer()
-            experiment.save_video(args.name + ".mp4", path=experiment_path + "/video", length_in_sec=120)
+        if args.time_scale_factor is not None:
+            conf.worker_conf.time_scale_factor = args.time_scale_factor
+
+        with TemporaryDirectory() as tmppath:
+            with Experiment(1, 1, tmppath + "/replay", conf, display_dpi=3) as experiment:
+                experiment.restore_model(checkpoint_path)
+                experiment.fill_goal_buffer()
+                experiment.save_video(args.name + ".mp4", path=experiment_path + "/video", length_in_sec=120)
