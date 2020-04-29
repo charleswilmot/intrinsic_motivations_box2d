@@ -9,6 +9,7 @@ MEM_BASELINE = 1000
 
 class ClusterQueue:
     def __init__(self, **kwargs):
+        kwargs["video"] = False
         self.experiment_path = make_experiment_path(
             lr=kwargs["learning_rate"] if "learning_rate" in kwargs else None,
             discount_factor=kwargs["discount_factor"] if "discount_factor" in kwargs else None,
@@ -46,113 +47,87 @@ class ClusterQueue:
 
 class CheckpointQueue(ClusterQueue):
     def __init__(self, video=False, n_workers=1, n_trajectories=100, save_every=100, learning_rate=0.0,
-                       sequence_length=10, batch_size=10, buffer_size=10, goal_buffer_size=10, updates_per_episode=1,
+                       time_scale_factor=2, batch_size=10, buffer_size=10, goal_buffer_size=10, updates_per_episode=1,
                        env_step_length=1, **kwargs):
         super().__init__(video=video, n_workers=n_workers, n_trajectories=n_trajectories, save_every=save_every,
-                         learning_rate=learning_rate, sequence_length=sequence_length, batch_size=batch_size,
+                         learning_rate=learning_rate, time_scale_factor=time_scale_factor, batch_size=batch_size,
                          buffer_size=buffer_size, goal_buffer_size=goal_buffer_size,
                          updates_per_episode=updates_per_episode, env_step_length=env_step_length, **kwargs)
 
 
 
-agency_conf_path = "../agencies/one_joint_2_levels.txt"
+description = "1_joint_2_levels_scaled_noise"
+agency_conf_path = "../agencies/one_joint_2_levels.json"
 
-# cq = CheckpointQueue(
-#     description="one_joint_2_levels_multi_time_scales_checkpoint",
-#     json_model="../models/one_joint.json",
-#     skin_order="../models/one_joint_skin_order.pkl",
-#     agency_conf_path=agency_conf_path)
-
-# name = "one_joint_2_levels_slowdown_64_latent_action_2"
-
-# cq = ClusterQueue(
-#     n_workers=32,
-#     description=name + "_critic_checkpoint",
-#     actor_speed_ratio=100000,
-#     train_actor_every=100000,
-#     learning_rate=5e-3,
-#     discount_factor=0.7,
-#     behaviour_noise_scale=0.15,
-#     target_smoothing_noise_scale=0.0,
-#     n_trajectories=10000,
-#     save_every=10000,
-#     batch_size=512,
-#     sequence_length=32,
-#     buffer_size=1024,
-#     goal_buffer_size=100,
-#     env_step_length=45,
-#     json_model="../models/one_joint.json",
-#     skin_order="../models/one_joint_skin_order.pkl",
-#     agency_conf_path=agency_conf_path)
-
-
-
-# for actor_speed_ratio in [8, 16, 32, 64]:
-#     cq = ClusterQueue(
-#         n_workers=32,
-#         description="one_joint_2_levels_multi_time_scales_asr_{}_bns_0.15".format(actor_speed_ratio),
-#         actor_speed_ratio=actor_speed_ratio,
-#         train_actor_every=2,
-#         learning_rate=5e-4,
-#         discount_factor=0.01,
-#         behaviour_noise_scale=0.15,
-#         target_smoothing_noise_scale=0.0,
-#         n_trajectories=2000000,
-#         save_every=500000,
-#         batch_size=256,
-#         time_scale_factor=10,
-#         buffer_size=1024,
-#         goal_buffer_size=100,
-#         env_step_length=45,
-#         restore_from="../experiments/2020_02_14-13.23.43_lr1.00e-04_discount_factor9.00e-01__one_joint_2_levels_multi_time_scales_checkpoint/checkpoints/000000100/",
-#         json_model="../models/one_joint.json",
-#         skin_order="../models/one_joint_skin_order.pkl",
-#         agency_conf_path=agency_conf_path)
-
-
-cq = ClusterQueue(
-    n_workers=32,
-    description="one_joint_1_level_multi_time_scales_previous_params_with_batch_size_64_buffer_size_128",
-    actor_speed_ratio=100,
-    train_actor_every=1,
-    learning_rate=1e-3,
-    discount_factor=0.7,
-    behaviour_noise_scale=0.1,
-    target_smoothing_noise_scale=0.075,
-    n_trajectories=150000,
-    save_every=150000,
-    batch_size=64,
-    time_scale_factor=10,
-    buffer_size=128,
-    goal_buffer_size=100,
-    env_step_length=45,
-    tau=0.01,
-    # restore_from="../experiments/2020_02_14-13.23.43_lr1.00e-04_discount_factor9.00e-01__one_joint_2_levels_multi_time_scales_checkpoint/checkpoints/000000100/",
+cq = CheckpointQueue(
+    description=description + "__checkpoint",
     json_model="../models/one_joint.json",
     skin_order="../models/one_joint_skin_order.pkl",
-    agency_conf_path="../agencies/one_joint_agency.txt")
-    # agency_conf_path="../agencies/one_joint_2_levels.txt")
+    agency_conf_path=agency_conf_path)
+
+checkpoint_path = cq.experiment_path + "/checkpoints/000000100/"
+print(checkpoint_path)
+time.sleep(30)
+
+for behaviour_noise_scale in [0.05, 0.1, 0.15, 0.2]:
+    cq = ClusterQueue(
+        n_workers=32,
+        description=description + "__noise_{:.02f}".format(behaviour_noise_scale),
+        actor_speed_ratio=100,
+        train_actor_every=1,
+        learning_rate=1e-3,
+        discount_factor=0.7,
+        behaviour_noise_scale=0.1,
+        target_smoothing_noise_scale=0.075,
+        n_trajectories=500000,
+        save_every=500000,
+        batch_size=64,
+        time_scale_factor=10,
+        buffer_size=128,
+        goal_buffer_size=100,
+        env_step_length=45,
+        tau=0.01,
+        restore_from=checkpoint_path,
+        json_model="../models/one_joint.json",
+        skin_order="../models/one_joint_skin_order.pkl",
+        agency_conf_path=agency_conf_path)
 
 
-# for actor_speed_ratio in [1, 5]:
-#     for train_actor_every in [10, 20, 40, 60, 100]:
-#         cq = ClusterQueue(
-#             n_workers=32,
-#             description="one_joint_2_levels_shallow_asr{}_tae{}_goal_is_gstate_95percent".format(actor_speed_ratio, train_actor_every),
-#             actor_speed_ratio=1,
-#             train_actor_every=train_actor_every,
-#             learning_rate=5e-3,
-#             discount_factor=0.5,
-#             behaviour_noise_scale=0.01,
-#             target_smoothing_noise_scale=0.0,
-#             n_trajectories=50000,
-#             save_every=50000,
-#             batch_size=512,
-#             sequence_length=32,
-#             buffer_size=1024,
-#             goal_buffer_size=100,
-#             env_step_length=45,
-#             restore_from="../experiments/2020_02_04-13.37.21_lr5.00e-03_discount_factor5.00e-01__one_joint_2_levels_shallow_critic_checkpoint/checkpoints/000010000/",
-#             json_model="../models/one_joint.json",
-#             skin_order="../models/one_joint_skin_order.pkl",
-#             agency_conf_path="../agencies/one_joint_2_levels_latent_action_size_1.txt")
+################################################################
+
+
+description = "1_joint_1_level_scaled_noise"
+agency_conf_path = "../agencies/one_joint_agency.json"
+
+cq = CheckpointQueue(
+    description=description + "__checkpoint",
+    json_model="../models/one_joint.json",
+    skin_order="../models/one_joint_skin_order.pkl",
+    agency_conf_path=agency_conf_path)
+
+checkpoint_path = cq.experiment_path + "/checkpoints/000000100/"
+print(checkpoint_path)
+time.sleep(30)
+
+for behaviour_noise_scale in [0.05, 0.1, 0.15, 0.2]:
+    cq = ClusterQueue(
+        n_workers=32,
+        description=description + "__noise_{:.02f}".format(behaviour_noise_scale),
+        actor_speed_ratio=100,
+        train_actor_every=1,
+        learning_rate=1e-3,
+        discount_factor=0.7,
+        behaviour_noise_scale=0.1,
+        target_smoothing_noise_scale=0.075,
+        n_trajectories=150000,
+        save_every=150000,
+        batch_size=64,
+        time_scale_factor=10,
+        buffer_size=128,
+        goal_buffer_size=100,
+        env_step_length=45,
+        tau=0.01,
+        restore_from=checkpoint_path,
+        json_model="../models/one_joint.json",
+        skin_order="../models/one_joint_skin_order.pkl",
+        agency_conf_path=agency_conf_path)
